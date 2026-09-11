@@ -1,0 +1,1 @@
+{"name":"@genuineknowledge/dynamic-workflow","version":"0.1.0","description":"Host agnostic dynamic workflow runtime","type":"module","exports":{".":"./index.js"},"files":["index.js","fusion_flow","grammar","SKILL.md","README.md"],"scripts":{"check":"python -m compileall -q fusion_flow","test":"npm run check"},"engines":{"node":">=18","python":">=3.11"},"license":"Apache-2.0"}
