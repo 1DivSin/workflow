@@ -1,5 +1,6 @@
-/node_modules/
-fusion_flow/generated/__pycache__/
-fusion_flow/generated/**/*.pyc
-fusion_flow/generated/*.interp
-fusion_flow/generated/*.tokens
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
