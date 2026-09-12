@@ -1,13 +1,18 @@
-#!/usr/bin/env python3
-"""Minimal host integration installer."""
-import argparse, shutil
-from pathlib import Path
-TARGETS={"codex":".agents/skills/open-dynamic-workflows","openclaw":"skills/open-dynamic-workflows","hermes":".hermes/skills/open-dynamic-workflows"}
-def detect(root): return {k:(root/Path(v).parent).exists() for k,v in TARGETS.items()}
+import argparse,json
+from .detect import detect_host
+from .installer import install
+from .uninstaller import uninstall
+from .doctor import diagnose
 def main():
- p=argparse.ArgumentParser(); p.add_argument("action",choices=["detect","install","uninstall","doctor"]); p.add_argument("host",nargs="?"); p.add_argument("--root",type=Path,default=Path.cwd()); a=p.parse_args()
- if a.action in ("detect","doctor"): print(detect(a.root)); return
- t=a.root/TARGETS[a.host]
- if a.action=="install": t.mkdir(parents=True,exist_ok=True); shutil.copy2(Path(__file__).parents[1]/"src"/"SKILL.md",t/"SKILL.md"); print(t)
- else: shutil.rmtree(t,ignore_errors=True)
-if __name__=="__main__": main()
+ p=argparse.ArgumentParser(prog='method-installer'); s=p.add_subparsers(dest='c',required=True)
+ s.add_parser('detect')
+ i=s.add_parser('installer'); i.add_argument('source',nargs='?',default='.'); i.add_argument('--destination')
+ u=s.add_parser('uninstaller'); u.add_argument('--target'); u.add_argument('--purge-state',action='store_true')
+ d=s.add_parser('doctor'); d.add_argument('--root',default='.')
+ a=p.parse_args()
+ if a.c=='detect': print(json.dumps(detect_host(),indent=2))
+ elif a.c=='installer': print('installed to',install(a.source,destination=a.destination))
+ elif a.c=='uninstaller':
+  for x in uninstall(target=a.target,purge_state=a.purge_state): print('removed',x)
+ else: print(json.dumps(diagnose(a.root),indent=2))
+if __name__=='__main__': main()

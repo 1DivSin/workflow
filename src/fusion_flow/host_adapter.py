@@ -1,95 +1,79 @@
-"""宿主适配边界。PSI 路径只有显式 PSI capability 才可解析。"""
+"""Runtime adapters for Codex, OpenClaw and Hermes."""
 from __future__ import annotations
-from contextvars import ContextVar
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Mapping
-from contextlib import contextmanager
-from typing import Iterator
+from typing import Callable
+from contextvars import ContextVar
+import os, shutil, subprocess
 
-import os
-
-class HostKind(StrEnum):
-    PSI = "psi-agent"
-    CODEX = "codex"
-    OPENCLAW = "openclaw"
-    HERMES = "hermes"
-    EXTERNAL = "external"
-
-@dataclass(frozen=True)
-class AgentContext:
-    kind: HostKind
-    instance_id: str | None = None
-
-@dataclass(frozen=True)
-class WorkflowPaths:
-    workspace: Path
-    tools_dir: Path
-    state_dir: Path
-
-class PsiPathProvider:
-    def __init__(self, context: AgentContext, environ: Mapping[str, str] | None = None):
-        self.context = context
-        self.environ = environ if environ is not None else os.environ
-    def _check(self) -> None:
-        if self.context.kind is not HostKind.PSI:
-            raise PermissionError("PSI workflow paths are available only to psi-agent")
-    def _get(self, name: str) -> Path | None:
-        self._check()
-        value = self.environ.get(name, "").strip()
-        return Path(value).expanduser() if value else None
-    def workflow_workspace(self) -> Path | None: return self._get("PSI_WORKFLOW_WORKSPACE")
-    def workflow_tools_dir(self) -> Path | None: return self._get("PSI_WORKFLOW_TOOLS_DIR")
-    def workflow_state_dir(self) -> Path | None: return self._get("PSI_WORKFLOW_STATE_DIR")
-
-class HostAdapter:
-    def __init__(self, context: AgentContext, *, project_root: Path | None = None, psi_paths: PsiPathProvider | None = None):
-        self.context = context
-        self.project_root = project_root or Path.cwd()
-        self.psi_paths = psi_paths
-    def workflow_paths(self, defaults: WorkflowPaths) -> WorkflowPaths:
-        if self.context.kind is HostKind.PSI:
-            provider = self.psi_paths or PsiPathProvider(self.context)
-            return WorkflowPaths(provider.workflow_workspace() or defaults.workspace, provider.workflow_tools_dir() or defaults.tools_dir, provider.workflow_state_dir() or defaults.state_dir)
-        if self.context.kind is HostKind.CODEX:
-            root = Path(os.environ.get("CODEX_WORKSPACE") or self.project_root)
-            return WorkflowPaths(root, Path(os.environ.get("CODEX_TOOLS_DIR") or root / ".agents" / "skills"), root / ".codex" / "workflow")
-        if self.context.kind is HostKind.OPENCLAW:
-            root = Path(os.environ.get("OPENCLAW_WORKSPACE") or self.project_root)
-            return WorkflowPaths(root, Path(os.environ.get("OPENCLAW_TOOLS_DIR") or root / "skills"), root / ".openclaw" / "workflow")
-        if self.context.kind is HostKind.HERMES:
-            root = Path(os.environ.get("HERMES_WORKSPACE") or self.project_root)
-            return WorkflowPaths(root, Path(os.environ.get("HERMES_TOOLS_DIR") or root / "skills"), root / ".hermes" / "workflow")
-        return defaults
-
+HOST_ENV = "PSI_WORKFLOW_HOST"
 WORKSPACE_ENV = "PSI_WORKFLOW_WORKSPACE"
 TOOLS_ENV = "PSI_WORKFLOW_TOOLS_DIR"
 STATE_ENV = "PSI_WORKFLOW_STATE_DIR"
-_ai_socket_provider: ContextVar[Callable[[], str | None] | None] = ContextVar("psi_workflow_ai_socket_provider", default=None)
-_agent_factory: ContextVar[Callable[[object], object] | None] = ContextVar("psi_workflow_agent_factory", default=None)
 
-def workspace_dir(default: Path) -> Path: return Path(os.environ.get(WORKSPACE_ENV) or default).expanduser()
-def tools_dir(default: Path) -> Path: return Path(os.environ.get(TOOLS_ENV) or default).expanduser()
-def state_dir(default: Path) -> Path: return Path(os.environ.get(STATE_ENV) or default).expanduser()
-def set_ai_socket_provider(provider):
-    """Set provider for this async context and return a reset token."""
-    return _ai_socket_provider.set(provider)
+@dataclass(frozen=True)
+class HostConfig:
+    name: str
+    executable: str | None
+    workspace: Path
+    tools_dir: Path
+    state_dir: Path
+    command: tuple[str, ...]
+    env: dict[str, str]
 
-def reset_ai_socket_provider(token) -> None:
-    _ai_socket_provider.reset(token)
+_ai_socket_provider: ContextVar[Callable[[], str | None] | None] = ContextVar("ai_socket", default=None)
+_agent_factory: ContextVar[Callable[[object], object] | None] = ContextVar("agent_factory", default=None)
 
-@contextmanager
-def ai_socket_provider(provider) -> Iterator[None]:
-    token = set_ai_socket_provider(provider)
-    try:
-        yield
-    finally:
-        reset_ai_socket_provider(token)
+def _credential_env() -> dict[str, str]:
+    path = Path(os.getenv('PSI_WORKFLOW_CREDENTIALS', str(Path.home() / '.config/genuineknowledge/agents.env')))
+    values = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                if value.strip(): values[key.strip()] = value.strip().strip(chr(34)).strip(chr(39))
+    return values
 
-def ai_socket(default_provider):
-    provider = _ai_socket_provider.get()
-    value = provider() if provider is not None else None
-    return value if value is not None else default_provider()
+def host_name() -> str:
+    return os.getenv(HOST_ENV, "generic").strip().lower() or "generic"
+
+def host_config(default: str | Path = ".") -> HostConfig:
+    root = Path(default).expanduser().resolve()
+    name = host_name()
+    home = Path.home()
+    bases = {"codex": Path(os.getenv("CODEX_HOME", str(home / ".codex"))),
+             "openclaw": Path(os.getenv("OPENCLAW_HOME", str(home / ".openclaw"))),
+             "hermes": Path(os.getenv("HERMES_HOME", str(home / ".hermes")))}
+    base = bases.get(name, root / ".psi")
+    exe = os.getenv(name.upper() + "_EXECUTABLE") if name in bases else None
+    source_roots = {'codex': Path('/public/home/sychen/cxy/open_source_agents/codex/bin/codex.js'), 'openclaw': Path('/public/home/sychen/cxy/open_source_agents/openclaw/openclaw.mjs'), 'hermes': Path('/public/home/sychen/cxy/open_source_agents/hermes-agent')}
+    source = source_roots.get(name)
+    exe = exe or (shutil.which(name) if name in bases else None)
+    if not exe and source and source.exists():
+        exe = str(source)
+    workspace = Path(os.getenv(WORKSPACE_ENV, os.getenv(name.upper() + "_WORKSPACE", str(root))))
+    tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
+    state = Path(os.getenv(STATE_ENV, str(base / "state")))
+    command = ((('node', exe) if name in ('codex', 'openclaw') else ('python3', '-m', 'hermes_cli.main')) if exe else (name,))
+    env = {**_credential_env(), **os.environ, 'PSI_WORKFLOW_HOST': name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), 'PATH': '/public/home/sychen/.local/node-current/bin:' + os.getenv('PATH', '')}
+    if name == 'hermes':
+        env['PYTHONPATH'] = str(source_roots['hermes']) + os.pathsep + os.getenv('PYTHONPATH', '')
+        venv = source_roots['hermes'] / '.venv' / 'bin' / 'python'
+        if venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
+    return HostConfig(name, exe, workspace, tools, state, command, env)
+
+def workspace_dir(default): return host_config(default).workspace
+def tools_dir(default): return host_config(default).tools_dir
+def state_dir(default): return host_config(default).state_dir
+
+def run_host(args=(), default=".") -> subprocess.CompletedProcess[str]:
+    cfg = host_config(default)
+    if not cfg.executable:
+        raise FileNotFoundError(f"{cfg.name} executable not found; set {cfg.name.upper()}_EXECUTABLE")
+    return subprocess.run((*cfg.command, *tuple(args)), cwd=cfg.workspace, env={**os.environ, **cfg.env}, text=True, capture_output=True, check=False)
+
+def set_ai_socket_provider(provider): _ai_socket_provider.set(provider)
+def ai_socket(default_provider): return (_ai_socket_provider.get() or default_provider)()
 def set_agent_factory(factory): _agent_factory.set(factory)
 def agent_handle(config, default_factory): return (_agent_factory.get() or default_factory)(config)
