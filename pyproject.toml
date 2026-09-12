@@ -8,7 +8,12 @@ version = "0.1.0"
 description = "Host agnostic dynamic workflow runtime"
 requires-python = ">=3.11"
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["run_flow", "flow_manage", "workflow_sample"]
+
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["fusion_flow*"]
 [tool.ruff]
 line-length = 100
