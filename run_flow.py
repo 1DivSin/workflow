@@ -1461,7 +1461,7 @@ async def _communicate_program(
             return
         try:
             await process.stdin.send(stdin.encode("utf-8"))
-        except BrokenPipeError, anyio.BrokenResourceError, anyio.ClosedResourceError:
+        except (BrokenPipeError, anyio.BrokenResourceError, anyio.ClosedResourceError):
             pass
         finally:
             with suppress(
@@ -1608,7 +1608,7 @@ def _program_diagnostic_payload(raw: bytes) -> tuple[str, str | None, str]:
             text = raw.decode(encoding)
             raw_base64 = None if encoding == "utf-8" else base64.b64encode(raw).decode("ascii")
             return text, raw_base64, encoding
-        except LookupError, UnicodeDecodeError:
+        except (LookupError, UnicodeDecodeError):
             continue
     return (
         raw.decode("utf-8", errors="backslashreplace"),
