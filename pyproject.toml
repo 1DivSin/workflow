@@ -10,3 +10,11 @@ requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 include = ["fusion_flow*"]
+[tool.ruff]
+line-length = 100
+target-version = 'py311'
+
+[tool.mypy]
+python_version = '3.11'
+ignore_missing_imports = true
+check_untyped_defs = true
