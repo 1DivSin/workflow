@@ -1920,7 +1920,7 @@ async def _read_process_streams(
         try:
             if stdin_payload is not None:
                 await process.stdin.send(stdin_payload)
-        except BrokenPipeError, anyio.BrokenResourceError, anyio.ClosedResourceError:
+        except (BrokenPipeError, anyio.BrokenResourceError, anyio.ClosedResourceError):
             pass
         finally:
             with suppress(

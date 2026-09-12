@@ -172,7 +172,7 @@ async def _record_workflow_authoring(
             try:
                 payload = json.loads(await event_path.read_text(encoding="utf-8"))
                 previous_hash = payload["flow"]["sha256"]
-            except KeyError, TypeError, ValueError, OSError, UnicodeError:
+            except (KeyError, TypeError, ValueError, OSError, UnicodeError):
                 latest_created_at = "\uffff"
                 latest_source_hash = None
             else:
