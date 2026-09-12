@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable
 from contextvars import ContextVar
 import os, shutil, subprocess
+from .providers import provider_environment
 
 HOST_ENV = "PSI_WORKFLOW_HOST"
 WORKSPACE_ENV = "PSI_WORKFLOW_WORKSPACE"
@@ -57,6 +58,10 @@ def host_config(default: str | Path = ".") -> HostConfig:
     state = Path(os.getenv(STATE_ENV, str(base / "state")))
     command = ((('node', exe) if name in ('codex', 'openclaw') else ('python3', '-m', 'hermes_cli.main')) if exe else (name,))
     env = {**_credential_env(), **os.environ, 'PSI_WORKFLOW_HOST': name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), 'PATH': '/public/home/sychen/.local/node-current/bin:' + os.getenv('PATH', '')}
+    try:
+        env.update(provider_environment('default'))
+    except (FileNotFoundError, RuntimeError):
+        pass
     if name == 'hermes':
         env['PYTHONPATH'] = str(source_roots['hermes']) + os.pathsep + os.getenv('PYTHONPATH', '')
         venv = source_roots['hermes'] / '.venv' / 'bin' / 'python'
@@ -77,3 +82,4 @@ def set_ai_socket_provider(provider): _ai_socket_provider.set(provider)
 def ai_socket(default_provider): return (_ai_socket_provider.get() or default_provider)()
 def set_agent_factory(factory): _agent_factory.set(factory)
 def agent_handle(config, default_factory): return (_agent_factory.get() or default_factory)(config)
+
