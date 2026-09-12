@@ -26,11 +26,29 @@ from anyio.abc import ByteReceiveStream, Process
 from json_repair import repair_json
 from loguru import logger
 
-from psi_agent.session.agent import AgentError, SessionAgent, current_tool_ai_socket
-from psi_agent.session.ai_client import AiClient
-from psi_agent.session.conversation import Conversation
-from psi_agent.session.schedule_registry import ScheduleRegistry
-from psi_agent.session.tool_registry import FileEntry, ToolFunction, ToolRegistry
+try:
+    from psi_agent.session.agent import AgentError, SessionAgent, current_tool_ai_socket
+    from psi_agent.session.ai_client import AiClient
+    from psi_agent.session.conversation import Conversation
+    from psi_agent.session.schedule_registry import ScheduleRegistry
+    from psi_agent.session.tool_registry import FileEntry, ToolFunction, ToolRegistry
+except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
+    AgentError = RuntimeError
+    SessionAgent = Any  # type: ignore[assignment,misc]
+    Conversation = Any  # type: ignore[assignment,misc]
+    ScheduleRegistry = Any  # type: ignore[assignment,misc]
+    FileEntry = Any  # type: ignore[assignment,misc]
+    ToolFunction = Any  # type: ignore[assignment,misc]
+    ToolRegistry = Any  # type: ignore[assignment,misc]
+
+    def current_tool_ai_socket() -> str | None:
+        return None
+
+    class AiClient:  # type: ignore[no-redef]
+        def __init__(self, _socket: str) -> None:
+            raise RuntimeError(
+                "No host runtime adapter is installed; psi-agent is unavailable"
+            )
 
 _TOOLS_DIR = Path(__file__).parent
 _AGENT_DIR = _TOOLS_DIR.parent
