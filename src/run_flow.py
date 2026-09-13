@@ -876,12 +876,25 @@ def _parse_agent_step_result(
         if not isinstance(error.__cause__, json.JSONDecodeError):
             raise _AgentStepResultParseError(str(error)) from error
         fenced = _extract_single_json_fence(value)
+        candidates = [fenced] if fenced is not None else []
         if fenced is None:
+            decoder = json.JSONDecoder()
+            candidates = []
+            for offset, character in enumerate(value):
+                if character == "{":
+                    try:
+                        parsed, _ = decoder.raw_decode(value[offset:])
+                        candidates.append(json.dumps(parsed, ensure_ascii=False))
+                    except json.JSONDecodeError:
+                        continue
+        for candidate in candidates:
+            try:
+                result = _parse_strict_agent_mapping(candidate, label=label)
+                break
+            except ValueError:
+                continue
+        else:
             raise _AgentStepResultParseError(str(error)) from error
-        try:
-            result = _parse_strict_agent_mapping(fenced, label=label)
-        except ValueError as fenced_error:
-            raise _AgentStepResultParseError(str(fenced_error)) from fenced_error
 
     expected = set(output_ids)
     actual = set(result)
