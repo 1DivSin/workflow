@@ -1719,10 +1719,11 @@ def _program_result_outputs(
         )
     result = attempts[-1]
     if result.error:
+        is_truncation = " exceeded the " in result.error and "-byte limit" in result.error
         return _program_error_outputs(
             invocation,
-            phase="execution",
-            kind="execution_error",
+            phase="output_capture" if is_truncation else "execution",
+            kind="output_truncated" if is_truncation else "execution_error",
             message=result.error,
             attempts=attempts,
         )
@@ -1884,20 +1885,11 @@ async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[s
     workspace, cwd, script = await _resolve_program_contract(invocation)
     # Program steps have deterministic subprocess semantics. Asking an interactive
     # model to run them can stall and cannot guarantee byte accurate stdout.
-    result = subprocess.run(
-        [sys.executable, str(script), *invocation.argv[1:]],
-        cwd=str(cwd),
-        input=invocation.stdin or "",
-        text=True,
-        capture_output=True,
-        check=False,
+    result = await _execute_program_command(
+        invocation, (sys.executable, str(script), *invocation.argv[1:]),
+        stdin=invocation.stdin or "",
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"Declared Program failed with exit code {result.returncode}: {result.stderr.strip()}")
-    return _normalize_program_stdout(
-        invocation.binding_name, invocation.output_ids, result.stdout.strip(),
-        terminal=invocation.terminal,
-    )
+    return _program_result_outputs(invocation, [result])
     contract = {"script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin, "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids), "terminal": invocation.terminal, "instruction": invocation.instruction}
     client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(workspace))
     await client.start()
