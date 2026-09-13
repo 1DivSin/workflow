@@ -1,0 +1,33 @@
+{
+  "error_type": "ExceptionGroup",
+  "flow_path": "flows/q07/q07.workflow",
+  "run_id": "3f15df69bcd406bc2f64d00ffab9d414",
+  "status": "failed",
+  "steps": [
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "duration_ms": 0.22391602396965027,
+          "error_type": "AttributeError",
+          "finished_at": "2026-09-13T20:15:46.955911Z",
+          "started_at": "2026-09-13T20:15:46.955687Z",
+          "status": "error"
+        }
+      ],
+      "duration_ms": 0.561784952878952,
+      "error_type": "AttributeError",
+      "executor_id": "worker",
+      "executor_kind": "Agent",
+      "finished_at": "2026-09-13T20:15:46.956031Z",
+      "foreach": false,
+      "iterations": [],
+      "started_at": "2026-09-13T20:15:46.955469Z",
+      "status": "error",
+      "step_id": "nested",
+      "step_name": "Nested workflow request"
+    }
+  ],
+  "version": 1,
+  "workflow_id": "q07"
+}

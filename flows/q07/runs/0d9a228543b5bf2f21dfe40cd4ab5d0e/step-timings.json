@@ -1,0 +1,33 @@
+{
+  "error_type": "ExceptionGroup",
+  "flow_path": "flows/q07/q07_safe.workflow",
+  "run_id": "0d9a228543b5bf2f21dfe40cd4ab5d0e",
+  "status": "failed",
+  "steps": [
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "duration_ms": 0.1843143254518509,
+          "error_type": "AttributeError",
+          "finished_at": "2026-09-13T20:15:25.138627Z",
+          "started_at": "2026-09-13T20:15:25.138443Z",
+          "status": "error"
+        }
+      ],
+      "duration_ms": 0.4742499440908432,
+      "error_type": "AttributeError",
+      "executor_id": "worker",
+      "executor_kind": "Agent",
+      "finished_at": "2026-09-13T20:15:25.138735Z",
+      "foreach": false,
+      "iterations": [],
+      "started_at": "2026-09-13T20:15:25.138261Z",
+      "status": "error",
+      "step_id": "step",
+      "step_name": "Nested launcher isolation"
+    }
+  ],
+  "version": 1,
+  "workflow_id": "q07_safe"
+}
