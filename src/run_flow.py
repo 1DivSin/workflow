@@ -1896,6 +1896,10 @@ async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[s
                 line = line.strip("`").strip()
             if line and line not in candidates:
                 candidates.append(line)
+        for match in re.findall(r"\\b(?:true|false)\\b", text, flags=re.IGNORECASE):
+            value = match.lower()
+            if value not in candidates:
+                candidates.append(value)
     for candidate in candidates:
         try:
             return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate, terminal=invocation.terminal)
