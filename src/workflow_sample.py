@@ -48,7 +48,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import anyio
-try:\n    from _workflow_authoring_context import current_prompt as _current_authoring_prompt\nexcept ImportError:\n    def _current_authoring_prompt():\n        return \ 
+from _workflow_authoring_context import current_prompt as _current_authoring_prompt
 
 from fusion_flow.host_adapter import workspace_dir as _host_workspace_dir
 
