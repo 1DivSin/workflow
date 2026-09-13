@@ -44,8 +44,15 @@ class CodexAppServerClient:
             line = await self.proc.stdout.readline()
             if not line: raise RuntimeError("Codex app-server closed stdout")
             data = json.loads(line)
-            if isinstance(data.get("method"), str): yield CodexEvent(data["method"], data.get("params", {}))
-            if data.get("id") == ident: return
+            if isinstance(data.get("method"), str):
+                method = data["method"]
+                yield CodexEvent(method, data.get("params", {}))
+                if method in {"turn/completed", "turn/failed", "turn/cancelled"}:
+                    return
+            if data.get("id") == ident:
+                # turn/start is only an acknowledgement; keep reading notifications
+                # until the terminal turn event carries the assistant output.
+                continue
 
     async def close(self) -> None:
         if self.proc is None: return

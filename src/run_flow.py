@@ -39,7 +39,22 @@ except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
     ScheduleRegistry = Any  # type: ignore[assignment,misc]
     FileEntry = Any  # type: ignore[assignment,misc]
     ToolFunction = Any  # type: ignore[assignment,misc]
-    ToolRegistry = Any  # type: ignore[assignment,misc]
+
+    class ToolRegistry:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            self.tools = {}
+            self.funcs = {}
+        @classmethod
+        async def load(cls, *_args, **_kwargs):
+            return cls()
+        async def refresh(self):
+            return {}
+        def get(self, _name):
+            return None
+
+    class FileEntry:  # type: ignore[no-redef]
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
 
     def current_tool_ai_socket() -> str | None:
         return None
@@ -1867,6 +1882,45 @@ async def _registered_launch_violation(
     return ""
 
 
+async def _complete_program_step_codex(invocation: ProgramInvocation) -> dict[str, object]:
+    """Execute a Program contract through the active Codex app-server host."""
+    workspace, cwd, script = await _resolve_program_contract(invocation)
+    contract = {
+        "script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin,
+        "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids),
+        "terminal": invocation.terminal, "instruction": invocation.instruction,
+    }
+    client = CodexAppServerClient(
+        command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
+        cwd=str(workspace),
+    )
+    await client.start()
+    chunks: list[str] = []
+    try:
+        async for event in client.prompt(str(workspace),
+            "Execute this exact Program contract using the workspace shell. Do not edit the script. "
+            "Run it once with the supplied stdin and return only the captured stdout, preserving JSON exactly. "
+            + json.dumps(contract, ensure_ascii=False, sort_keys=True)):
+            def collect(value: object) -> None:
+                if isinstance(value, str): chunks.append(value)
+                elif isinstance(value, dict):
+                    for item in value.values(): collect(item)
+                elif isinstance(value, list):
+                    for item in value: collect(item)
+            collect(event.params)
+    finally:
+        await client.close()
+    if not chunks:
+        raise RuntimeError("Codex Program agent returned no captured stdout")
+    errors = []
+    for candidate in reversed(chunks):
+        try:
+            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip(), terminal=invocation.terminal)
+        except ValueError as error:
+            errors.append(str(error))
+    raise ValueError(f"Codex Program agent returned no valid captured stdout: {errors[-1] if errors else 'empty'}")
+
+
 async def _complete_program_step(
     invocation: ProgramInvocation,
     *,
@@ -1874,6 +1928,9 @@ async def _complete_program_step(
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
     """Run one Program through a narrow Agent and a deterministic process tool."""
+
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex":
+        return await _complete_program_step_codex(invocation)
 
     workspace, cwd, script = await _resolve_program_contract(invocation)
     invocation = replace(invocation, cwd=cwd)
@@ -2796,7 +2853,7 @@ async def _execute_persisted_run(
         return await _complete_program_step(
             invocation,
             ai_socket=ai_socket,
-            tool_registry=await get_step_tools(),
+            tool_registry=(None if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex" else await get_step_tools()),
         )
 
     async def prepare_human(prompt: str, context: CompletionContext) -> str:
