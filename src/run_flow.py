@@ -1865,6 +1865,28 @@ async def _registered_launch_violation(
     return ""
 
 
+async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
+    workspace, cwd, script = await _resolve_program_contract(invocation)
+    client = OpenClawGatewayClient()
+    await client.start()
+    chunks = []
+    try:
+        prompt = "Execute the declared Program once. Run this script and return only its captured stdout as strict JSON: " + str(script)
+        async for event in client.prompt(prompt):
+            payload = event.payload
+            text = payload.get("text") if isinstance(payload, dict) else None
+            if isinstance(text, str): chunks.append(text)
+    finally:
+        await client.close()
+    for text in reversed(chunks):
+        for candidate in [text.strip(), *reversed(text.strip().splitlines())]:
+            try:
+                return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip('` ').strip(), terminal=invocation.terminal)
+            except ValueError:
+                pass
+    result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
+    return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=invocation.terminal)
+
 async def _complete_program_step(
     invocation: ProgramInvocation,
     *,
@@ -1872,6 +1894,9 @@ async def _complete_program_step(
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
     """Run one Program through a narrow Agent and a deterministic process tool."""
+
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "openclaw":
+        return await _complete_program_step_openclaw(invocation)
 
     workspace, cwd, script = await _resolve_program_contract(invocation)
     invocation = replace(invocation, cwd=cwd)
