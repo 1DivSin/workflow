@@ -564,6 +564,10 @@ class _AgentSessionAdapter:
                 )
             return existing
         handle = _host_agent_handle(config, flow.agent)
+        if handle is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
+            handle = AgentHandle(name=context.executor_id, config=config)
+        if handle is None:
+            raise ExecutionPlanError(f"No Agent handle is registered for executor {context.executor_id!r}")
         self._handles[context.executor_id] = handle
         return handle
 
