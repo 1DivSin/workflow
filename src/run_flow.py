@@ -97,6 +97,7 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
+from fusion_flow.adapters import HermesACPClient
 from fusion_flow.host_adapter import (
     agent_handle as _host_agent_handle,
     host_available as _host_available,
@@ -618,12 +619,26 @@ class _AgentSessionAdapter:
         _reject_unsupported_agent_routing(config)
         config_token = _CURRENT_AGENT_CONFIG.set(config)
         try:
-            outputs = await _complete_agent_step(
-                invocation.prompt,
-                context,
-                ai_socket=self._ai_socket,
-                tool_registry=tool_registry,
-            )
+            if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
+                client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(_workspace_dir()))
+                await client.start()
+                session_id = await client.new_session(str(_workspace_dir()))
+                chunks: list[str] = []
+                async for event in client.prompt(session_id, invocation.prompt):
+                    update = event.params.get("update", event.params)
+                    content = update.get("content") if isinstance(update, dict) else None
+                    if isinstance(content, str): chunks.append(content)
+                    elif isinstance(content, list):
+                        chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+                await client.close()
+                outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
+            else:
+                outputs = await _complete_agent_step(
+                    invocation.prompt,
+                    context,
+                    ai_socket=self._ai_socket,
+                    tool_registry=tool_registry,
+                )
         finally:
             _CURRENT_AGENT_CONFIG.reset(config_token)
         encoded = json.dumps(
@@ -2949,8 +2964,8 @@ async def run_flow(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() != "hermes":
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3088,8 +3103,8 @@ async def run_flow_resume(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() != "hermes":
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
