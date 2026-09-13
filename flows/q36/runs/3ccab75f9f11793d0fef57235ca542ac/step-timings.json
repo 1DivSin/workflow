@@ -1,0 +1,56 @@
+{
+  "error_type": null,
+  "flow_path": "flows/q36/q36.workflow",
+  "run_id": "3ccab75f9f11793d0fef57235ca542ac",
+  "status": "completed",
+  "steps": [
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "duration_ms": 94.87635502591729,
+          "error_type": null,
+          "finished_at": "2026-09-13T19:48:03.200227Z",
+          "started_at": "2026-09-13T19:48:03.105351Z",
+          "status": "ok"
+        }
+      ],
+      "duration_ms": 95.25437327101827,
+      "error_type": null,
+      "executor_id": "keol_program",
+      "executor_kind": "Program",
+      "finished_at": "2026-09-13T19:48:03.200358Z",
+      "foreach": false,
+      "iterations": [],
+      "started_at": "2026-09-13T19:48:03.105104Z",
+      "status": "ok",
+      "step_id": "keol",
+      "step_name": "KEOL patch"
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "duration_ms": 209.41306790336967,
+          "error_type": null,
+          "finished_at": "2026-09-13T19:48:03.314910Z",
+          "started_at": "2026-09-13T19:48:03.105497Z",
+          "status": "ok"
+        }
+      ],
+      "duration_ms": 209.91242211312056,
+      "error_type": null,
+      "executor_id": "psi_program",
+      "executor_kind": "Program",
+      "finished_at": "2026-09-13T19:48:03.315089Z",
+      "foreach": false,
+      "iterations": [],
+      "started_at": "2026-09-13T19:48:03.105177Z",
+      "status": "ok",
+      "step_id": "psi",
+      "step_name": "psi-agent patch"
+    }
+  ],
+  "version": 1,
+  "workflow_id": "q36"
+}

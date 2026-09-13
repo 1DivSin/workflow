@@ -5,7 +5,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 
 import websockets
 
@@ -13,7 +13,13 @@ import websockets
 @dataclass
 class OpenClawResult:
     text: str
-    raw: dict[str, Any]
+    payload: dict[str, Any]
+
+
+@dataclass
+class OpenClawEvent:
+    event: str
+    payload: dict[str, Any]
 
 
 class OpenClawGatewayClient:
@@ -32,7 +38,7 @@ class OpenClawGatewayClient:
             raise RuntimeError(f"OpenClaw gateway expected challenge, got {challenge!r}")
         params: dict[str, Any] = {
             "minProtocol": 4, "maxProtocol": 4,
-            "client": {"id": "cli", "version": "workflow", "platform": "linux", "mode": "backend"},
+            "client": {"id": "cli", "version": "workflow", "platform": "linux", "mode": "cli"},
             "role": "operator", "scopes": ["operator.read", "operator.write"],
             "caps": [], "commands": [], "permissions": {},
         }
@@ -56,17 +62,14 @@ class OpenClawGatewayClient:
                 raise RuntimeError(f"OpenClaw {method} failed: {msg.get('error')}")
             return msg.get("payload", {})
 
-    async def prompt(self, text: str, *, session_key: str | None = None) -> OpenClawResult:
+    async def prompt(self, text: str, *, session_key: str | None = None) -> AsyncIterator[OpenClawEvent]:
         key = session_key or self.session_key
         accepted = await self.request("chat.send", {"sessionKey": key, "message": text, "deliver": False, "idempotencyKey": str(uuid.uuid4())})
         run_id = accepted.get("runId")
         if not isinstance(run_id, str):
             raise RuntimeError(f"OpenClaw chat.send returned no runId: {accepted!r}")
         result = await self.request("agent.wait", {"runId": run_id, "timeoutMs": 120000})
-        text_out = result.get("text") or result.get("response") or result.get("message") or ""
-        if not isinstance(text_out, str):
-            raise RuntimeError(f"OpenClaw agent.wait returned no text: {result!r}")
-        return OpenClawResult(text_out, result)
+        yield OpenClawEvent("agent.wait", result)
 
     async def close(self) -> None:
         if self.ws is not None:
