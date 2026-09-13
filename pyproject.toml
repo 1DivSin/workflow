@@ -14,7 +14,7 @@ py-modules = ["run_flow", "flow_manage", "workflow_sample"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["fusion_flow*", "installer*"]
+include = ["fusion_flow*"]
 [tool.ruff]
 line-length = 100
 target-version = 'py311'
@@ -23,6 +23,3 @@ target-version = 'py311'
 python_version = '3.11'
 ignore_missing_imports = true
 check_untyped_defs = true
-
-[tool.setuptools.data-files]
-"share/dynamic-workflow" = ["src/SKILL.md"]
