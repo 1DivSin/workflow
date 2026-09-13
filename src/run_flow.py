@@ -2793,7 +2793,27 @@ async def _prepare_human_step(
                     chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
         finally:
             await client.close()
-        return _prepared_question_json(_parse_prepared_human_question("".join(chunks)))
+        raw_response = "".join(chunks).strip()
+        try:
+            prepared = _parse_prepared_human_question(raw_response)
+        except ValueError:
+            # Hermes may prepend a short status sentence before its JSON object.
+            # Recover only a complete JSON object; keep the strict schema checks.
+            prepared = None
+            decoder = json.JSONDecoder()
+            for offset, character in enumerate(raw_response):
+                if character != "{":
+                    continue
+                try:
+                    value, _ = decoder.raw_decode(raw_response[offset:])
+                    candidate = json.dumps(value, ensure_ascii=False)
+                    prepared = _parse_prepared_human_question(candidate)
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            if prepared is None:
+                raise
+        return _prepared_question_json(prepared)
 
     agent, conversation = await _create_step_agent(
         ai_socket,
