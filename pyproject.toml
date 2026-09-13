@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "dynamic-workflow"
 version = "0.1.0"
 description = "Host agnostic dynamic workflow runtime"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = ["websockets>=12"]
 
 [tool.setuptools]

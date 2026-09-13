@@ -620,12 +620,8 @@ class _AgentSessionAdapter:
         config_token = _CURRENT_AGENT_CONFIG.set(config)
         try:
             if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "openclaw":
-                client = OpenClawGatewayClient(url=os.getenv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789"), token=os.getenv("OPENCLAW_GATEWAY_TOKEN"), session_key=os.getenv("OPENCLAW_SESSION_KEY", "agent:main:workflow"))
-                await client.start()
-                try:
-                    result = await client.prompt(invocation.prompt)
-                finally:
-                    await client.close()
+                client = OpenClawGatewayClient(command=tuple(os.getenv("OPENCLAW_AGENT_COMMAND", "openclaw agent --local --json").split()), cwd=str(_workspace_dir()))
+                result = await client.prompt(invocation.prompt)
                 outputs = _parse_agent_step_result(result.text, step_id=context.step_id, output_ids=context.output_ids)
             else:
                 outputs = await _complete_agent_step(
@@ -2231,14 +2227,17 @@ async def _load_step_tools(
             _STEP_TOOL_SESSIONS_BY_RUN.setdefault(run_id, set()).add(session_id)
         source = _STEP_TOOLS_SOURCES.get(session_id)
         if source is None:
-            source = await ToolRegistry.load(_host_tools_dir(_TOOLS_DIR), session_id=session_id)
+            if hasattr(ToolRegistry, "load"):
+                source = await ToolRegistry.load(_host_tools_dir(_TOOLS_DIR), session_id=session_id)
+            else:
+                source = _StepToolRegistry()
             _STEP_TOOLS_SOURCES[session_id] = source
-        else:
+        elif hasattr(source, "refresh"):
             await source.refresh()
 
         workspace = _workspace_dir()
         excluded_tools = _WORKFLOW_LAUNCHERS | _NESTED_TURN_TOOLS
-        tools = {name: tool for name, tool in source.tools.items() if name not in excluded_tools}
+        tools = {name: tool for name, tool in getattr(source, "tools", {}).items() if name not in excluded_tools}
         funcs = {
             name: _bind_step_tool_to_workspace(name, func, workspace)
             for name in tools
@@ -2960,7 +2959,7 @@ async def run_flow(
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
     ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() != "openclaw":
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3099,7 +3098,7 @@ async def run_flow_resume(
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
     ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() != "openclaw":
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
