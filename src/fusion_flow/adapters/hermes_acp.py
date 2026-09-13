@@ -78,6 +78,16 @@ class HermesACPClient:
         await self.request("session/cancel", {"sessionId": session_id})
 
     async def close(self) -> None:
-        if self.proc is None: return
-        if self.proc.stdin: self.proc.stdin.close()
-        await self.proc.wait(); self.proc = None
+        proc = self.proc
+        if proc is None:
+            return
+        self.proc = None
+        if proc.stdin is not None:
+            proc.stdin.close()
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()

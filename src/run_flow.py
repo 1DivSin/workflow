@@ -1882,6 +1882,22 @@ async def _registered_launch_violation(
 
 async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[str, object]:
     workspace, cwd, script = await _resolve_program_contract(invocation)
+    # Program steps have deterministic subprocess semantics. Asking an interactive
+    # model to run them can stall and cannot guarantee byte accurate stdout.
+    result = subprocess.run(
+        [sys.executable, str(script), *invocation.argv[1:]],
+        cwd=str(cwd),
+        input=invocation.stdin or "",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Declared Program failed with exit code {result.returncode}: {result.stderr.strip()}")
+    return _normalize_program_stdout(
+        invocation.binding_name, invocation.output_ids, result.stdout.strip(),
+        terminal=invocation.terminal,
+    )
     contract = {"script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin, "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids), "terminal": invocation.terminal, "instruction": invocation.instruction}
     client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(workspace))
     await client.start()
