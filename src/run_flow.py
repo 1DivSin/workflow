@@ -620,8 +620,12 @@ class _AgentSessionAdapter:
         config_token = _CURRENT_AGENT_CONFIG.set(config)
         try:
             if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "openclaw":
-                client = OpenClawGatewayClient(command=tuple(os.getenv("OPENCLAW_AGENT_COMMAND", "openclaw agent --local --json").split()), cwd=str(_workspace_dir()))
-                result = await client.prompt(invocation.prompt)
+                client = OpenClawGatewayClient(url=os.getenv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789"), token=os.getenv("OPENCLAW_GATEWAY_TOKEN"), session_key=os.getenv("OPENCLAW_SESSION_KEY", "agent:main:workflow"))
+                await client.start()
+                try:
+                    result = await client.prompt(invocation.prompt)
+                finally:
+                    await client.close()
                 outputs = _parse_agent_step_result(result.text, step_id=context.step_id, output_ids=context.output_ids)
             else:
                 outputs = await _complete_agent_step(
