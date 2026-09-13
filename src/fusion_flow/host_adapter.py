@@ -66,6 +66,10 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     node_bin = Path("/public/home/sychen/.local/node-current/bin")
     if node_bin.is_dir():
         path_parts.insert(0, str(node_bin))
+    if name == "hermes":
+        hermes_bin = Path("/public/home/sychen/cxy/open_source_agents/hermes-agent/.venv/bin")
+        if hermes_bin.is_dir():
+            path_parts.insert(0, str(hermes_bin))
     if inherited_path:
         path_parts.append(inherited_path)
     stable_path = os.pathsep.join(dict.fromkeys(path_parts))
