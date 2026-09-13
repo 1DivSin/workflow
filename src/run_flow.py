@@ -26,16 +26,34 @@ from anyio.abc import ByteReceiveStream, Process
 from json_repair import repair_json
 from loguru import logger
 
-from psi_agent.session.agent import AgentError, SessionAgent, current_tool_ai_socket
-from psi_agent.session.ai_client import AiClient
-from psi_agent.session.conversation import Conversation
-from psi_agent.session.schedule_registry import ScheduleRegistry
-from psi_agent.session.tool_registry import FileEntry, ToolFunction, ToolRegistry
+try:
+    from psi_agent.session.agent import AgentError, SessionAgent, current_tool_ai_socket
+    from psi_agent.session.ai_client import AiClient
+    from psi_agent.session.conversation import Conversation
+    from psi_agent.session.schedule_registry import ScheduleRegistry
+    from psi_agent.session.tool_registry import FileEntry, ToolFunction, ToolRegistry
+except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
+    AgentError = RuntimeError
+    SessionAgent = Any  # type: ignore[assignment,misc]
+    Conversation = Any  # type: ignore[assignment,misc]
+    ScheduleRegistry = Any  # type: ignore[assignment,misc]
+    FileEntry = Any  # type: ignore[assignment,misc]
+    ToolFunction = Any  # type: ignore[assignment,misc]
+    ToolRegistry = Any  # type: ignore[assignment,misc]
+
+    def current_tool_ai_socket() -> str | None:
+        return None
+
+    class AiClient:  # type: ignore[no-redef]
+        def __init__(self, _socket: str) -> None:
+            raise RuntimeError(
+                "No host runtime adapter is installed; psi-agent is unavailable"
+            )
 
 _TOOLS_DIR = Path(__file__).parent
-_AGENT_DIR = _TOOLS_DIR.parent
-_WORKSPACE_DIR = _AGENT_DIR
-_SKILL_DIR = _AGENT_DIR / "skills" / "workflow"
+_AGENT_DIR = _TOOLS_DIR.parent.parent if _TOOLS_DIR.parent.name == "tools" else _TOOLS_DIR.parent
+_WORKSPACE_DIR = Path(os.getenv("PSI_WORKFLOW_WORKSPACE", str(_AGENT_DIR)))
+_SKILL_DIR = (_AGENT_DIR / "skills" / "workflow") if (_AGENT_DIR / "skills" / "workflow").exists() else _TOOLS_DIR
 for _import_dir in (_TOOLS_DIR, _SKILL_DIR):
     if str(_import_dir) not in sys.path:
         sys.path.insert(0, str(_import_dir))
@@ -79,7 +97,14 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
-from fusion_flow.host_adapter import tools_dir as _host_tools_dir, workspace_dir as _host_workspace_dir, ai_socket as _host_ai_socket, state_dir as _host_state_dir, agent_handle as _host_agent_handle  # noqa: E402
+from fusion_flow.host_adapter import (
+    agent_handle as _host_agent_handle,
+    host_available as _host_available,
+    state_dir as _host_state_dir,
+    tools_dir as _host_tools_dir,
+    workspace_dir as _host_workspace_dir,
+    ai_socket as _host_ai_socket,
+)
 
 _STEP_SYSTEM_PROMPT = (
     "You execute exactly one assigned FusionFlow Agent step. "
@@ -1443,7 +1468,7 @@ async def _communicate_program(
             return
         try:
             await process.stdin.send(stdin.encode("utf-8"))
-        except BrokenPipeError, anyio.BrokenResourceError, anyio.ClosedResourceError:
+        except (BrokenPipeError, anyio.BrokenResourceError, anyio.ClosedResourceError):
             pass
         finally:
             with suppress(
@@ -1590,7 +1615,7 @@ def _program_diagnostic_payload(raw: bytes) -> tuple[str, str | None, str]:
             text = raw.decode(encoding)
             raw_base64 = None if encoding == "utf-8" else base64.b64encode(raw).decode("ascii")
             return text, raw_base64, encoding
-        except LookupError, UnicodeDecodeError:
+        except (LookupError, UnicodeDecodeError):
             continue
     return (
         raw.decode("utf-8", errors="backslashreplace"),
@@ -2922,9 +2947,11 @@ async def run_flow(
         passed through ``clarify``.
     """
 
-    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if not _host_available(_WORKSPACE_DIR):
+        return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
+    ai_socket = _host_ai_socket()
     if ai_socket is None:
-        raise RuntimeError("run_flow must be called by a psi-agent Session")
+        return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
 
@@ -3059,9 +3086,11 @@ async def run_flow_resume(
         reserved ``$fusion_flow/control`` Human-wait envelope.
     """
 
-    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if not _host_available(_WORKSPACE_DIR):
+        return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
+    ai_socket = _host_ai_socket()
     if ai_socket is None:
-        raise RuntimeError("run_flow_resume must be called by a psi-agent Session")
+        return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
 
