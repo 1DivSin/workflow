@@ -410,6 +410,12 @@ class _AgentStepResultParseError(ValueError):
 
 
 class _StepToolRegistry(ToolRegistry):
+    def __init__(self, *, files=None, tools=None, funcs=None):
+        self.files = files or {}
+        self.tools = tools or {}
+        self.funcs = funcs or {}
+    def get(self, name):
+        return self.funcs.get(name)
     async def refresh(self) -> dict[str, str]:
         return {}
 
