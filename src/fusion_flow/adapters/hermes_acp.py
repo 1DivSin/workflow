@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, json, os
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
@@ -23,7 +24,14 @@ class HermesACPClient:
     async def start(self) -> None:
         if self.proc is not None:
             return
-        self.proc = await asyncio.create_subprocess_exec(*self.command, cwd=self.cwd, env=self.env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        env = dict(os.environ)
+        env.update(self.env or {})
+        env_file = Path(env.get("HOME", str(Path.home()))) / ".hermes" / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.strip() and not line.lstrip().startswith("#") and "=" in line:
+                    k, v = line.split("=", 1); env.setdefault(k.strip(), v.strip().strip("\""))
+        self.proc = await asyncio.create_subprocess_exec(*self.command, cwd=self.cwd, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         await self.request("initialize", {"protocolVersion": 1, "clientInfo": {"name": "fusion-flow", "version": "0.1"}})
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -37,15 +45,14 @@ class HermesACPClient:
         await self.proc.stdin.drain()
         while True:
             line = await self.proc.stdout.readline()
-            if not line:
-                raise RuntimeError("Hermes ACP server closed stdout")
+            if not line: raise RuntimeError("Hermes ACP server closed stdout")
             msg = json.loads(line)
             if msg.get("id") == ident:
                 if "error" in msg: raise RuntimeError(f"Hermes ACP {method} failed: {msg['error']}")
                 return msg.get("result", {})
 
     async def new_session(self, cwd: str) -> str:
-        result = await self.request("session/new", {"cwd": cwd})
+        result = await self.request("session/new", {"cwd": cwd, "mcpServers": []})
         session_id = result.get("sessionId")
         if not isinstance(session_id, str): raise RuntimeError("Hermes ACP session/new returned no sessionId")
         return session_id

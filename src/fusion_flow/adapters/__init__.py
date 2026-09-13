@@ -1,2 +1,3 @@
-from .hermes_acp import ACPEvent, HermesACPClient
-__all__ = ["ACPEvent", "HermesACPClient"]
+from .openclaw_gateway import OpenClawGatewayClient, OpenClawResult
+
+__all__ = ["OpenClawGatewayClient", "OpenClawResult"]
