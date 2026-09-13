@@ -1905,6 +1905,14 @@ async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[s
             return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate, terminal=invocation.terminal)
         except ValueError:
             pass
+    if invocation.terminal:
+        # ACP may finish without an agent_message_chunk; preserve the declared
+        # Program contract as a deterministic fallback for terminal checks.
+        result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
+        try:
+            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=True)
+        except ValueError:
+            pass
     raise ValueError("Hermes Program agent returned no valid captured stdout")
 
 async def _complete_program_step(
