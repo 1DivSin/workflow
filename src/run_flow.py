@@ -39,7 +39,22 @@ except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
     ScheduleRegistry = Any  # type: ignore[assignment,misc]
     FileEntry = Any  # type: ignore[assignment,misc]
     ToolFunction = Any  # type: ignore[assignment,misc]
-    ToolRegistry = Any  # type: ignore[assignment,misc]
+
+    class ToolRegistry:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            self.tools = {}
+            self.funcs = {}
+        @classmethod
+        async def load(cls, *_args, **_kwargs):
+            return cls()
+        async def refresh(self):
+            return {}
+        def get(self, _name):
+            return None
+
+    class FileEntry:  # type: ignore[no-redef]
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
 
     def current_tool_ai_socket() -> str | None:
         return None
@@ -97,6 +112,7 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
+from fusion_flow.adapters import HermesACPClient, CodexAppServerClient
 from fusion_flow.host_adapter import (
     agent_handle as _host_agent_handle,
     host_available as _host_available,
@@ -618,12 +634,31 @@ class _AgentSessionAdapter:
         _reject_unsupported_agent_routing(config)
         config_token = _CURRENT_AGENT_CONFIG.set(config)
         try:
-            outputs = await _complete_agent_step(
-                invocation.prompt,
-                context,
-                ai_socket=self._ai_socket,
-                tool_registry=tool_registry,
-            )
+            host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
+            if host_name == "codex":
+                client = CodexAppServerClient(command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()), cwd=str(_workspace_dir()))
+                await client.start(); chunks: list[str] = []
+                async for event in client.prompt(str(_workspace_dir()), invocation.prompt):
+                    def collect(value: object) -> None:
+                        if isinstance(value, str): chunks.append(value)
+                        elif isinstance(value, dict):
+                            for item in value.values(): collect(item)
+                        elif isinstance(value, list):
+                            for item in value: collect(item)
+                    collect(event.params)
+                await client.close()
+                outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
+            elif host_name == "hermes":
+                client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(_workspace_dir()))
+                await client.start(); session_id = await client.new_session(str(_workspace_dir())); chunks: list[str] = []
+                async for event in client.prompt(session_id, invocation.prompt):
+                    update = event.params.get("update", event.params); content = update.get("content") if isinstance(update, dict) else None
+                    if isinstance(content, str): chunks.append(content)
+                    elif isinstance(content, list): chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+                await client.close()
+                outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
+            else:
+                outputs = await _complete_agent_step(invocation.prompt, context, ai_socket=self._ai_socket, tool_registry=tool_registry)
         finally:
             _CURRENT_AGENT_CONFIG.reset(config_token)
         encoded = json.dumps(
@@ -1847,6 +1882,45 @@ async def _registered_launch_violation(
     return ""
 
 
+async def _complete_program_step_codex(invocation: ProgramInvocation) -> dict[str, object]:
+    """Execute a Program contract through the active Codex app-server host."""
+    workspace, cwd, script = await _resolve_program_contract(invocation)
+    contract = {
+        "script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin,
+        "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids),
+        "terminal": invocation.terminal, "instruction": invocation.instruction,
+    }
+    client = CodexAppServerClient(
+        command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
+        cwd=str(workspace),
+    )
+    await client.start()
+    chunks: list[str] = []
+    try:
+        async for event in client.prompt(str(workspace),
+            "Execute this exact Program contract using the workspace shell. Do not edit the script. "
+            "Run it once with the supplied stdin and return only the captured stdout, preserving JSON exactly. "
+            + json.dumps(contract, ensure_ascii=False, sort_keys=True)):
+            def collect(value: object) -> None:
+                if isinstance(value, str): chunks.append(value)
+                elif isinstance(value, dict):
+                    for item in value.values(): collect(item)
+                elif isinstance(value, list):
+                    for item in value: collect(item)
+            collect(event.params)
+    finally:
+        await client.close()
+    if not chunks:
+        raise RuntimeError("Codex Program agent returned no captured stdout")
+    errors = []
+    for candidate in reversed(chunks):
+        try:
+            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip(), terminal=invocation.terminal)
+        except ValueError as error:
+            errors.append(str(error))
+    raise ValueError(f"Codex Program agent returned no valid captured stdout: {errors[-1] if errors else 'empty'}")
+
+
 async def _complete_program_step(
     invocation: ProgramInvocation,
     *,
@@ -1854,6 +1928,9 @@ async def _complete_program_step(
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
     """Run one Program through a narrow Agent and a deterministic process tool."""
+
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex":
+        return await _complete_program_step_codex(invocation)
 
     workspace, cwd, script = await _resolve_program_contract(invocation)
     invocation = replace(invocation, cwd=cwd)
@@ -2776,7 +2853,7 @@ async def _execute_persisted_run(
         return await _complete_program_step(
             invocation,
             ai_socket=ai_socket,
-            tool_registry=await get_step_tools(),
+            tool_registry=(None if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex" else await get_step_tools()),
         )
 
     async def prepare_human(prompt: str, context: CompletionContext) -> str:
@@ -2949,8 +3026,8 @@ async def run_flow(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3088,8 +3165,8 @@ async def run_flow_resume(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
