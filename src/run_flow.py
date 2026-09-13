@@ -2949,7 +2949,7 @@ async def run_flow(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
     if ai_socket is None:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
@@ -3088,7 +3088,7 @@ async def run_flow_resume(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
     if ai_socket is None:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
