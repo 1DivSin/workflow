@@ -631,9 +631,16 @@ class _AgentSessionAdapter:
                 async for event in client.prompt(session_id, invocation.prompt):
                     update = event.params.get("update", event.params)
                     content = update.get("content") if isinstance(update, dict) else None
-                    if isinstance(content, str): chunks.append(content)
+                    if isinstance(content, str):
+                        chunks.append(content)
+                    elif isinstance(content, dict) and isinstance(content.get("text"), str):
+                        chunks.append(content["text"])
                     elif isinstance(content, list):
-                        chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+                        chunks.extend(
+                            item.get("text", "")
+                            for item in content
+                            if isinstance(item, dict) and isinstance(item.get("text"), str)
+                        )
                 await client.close()
                 outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
             else:
