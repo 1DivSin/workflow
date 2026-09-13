@@ -583,6 +583,13 @@ class _AgentSessionAdapter:
     ) -> dict[str, object]:
         """Execute or resume one schema-bound Agent Step session."""
 
+        launcher_names = ("run_flow", "run_flow_resume", "flow_run")
+        if any(name in prompt for name in launcher_names):
+            raise ExecutionPlanError(
+                f"Agent Step {context.step_id!r} requested a nested Workflow launcher; "
+                "Workflow launcher tools are unavailable inside Agent Steps"
+            )
+
         handle = self._handle(context)
         invocation_id = context.dispatch.invocation_id or context.step_id
         session_id = _invocation_session_id(self._run_id, invocation_id)
