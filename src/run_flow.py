@@ -39,6 +39,12 @@ except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
     ScheduleRegistry = Any  # type: ignore[assignment,misc]
     FileEntry = Any  # type: ignore[assignment,misc]
     ToolFunction = Any  # type: ignore[assignment,misc]
+    class FileEntry:
+        def __init__(self, **kwargs): self.__dict__.update(kwargs)
+    class ToolFunction:
+        def __init__(self, name): self.name = name
+        @classmethod
+        def from_callable(cls, func): return cls(func.__name__)
     ToolRegistry = Any  # type: ignore[assignment,misc]
 
     def current_tool_ai_socket() -> str | None:
