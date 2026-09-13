@@ -37,22 +37,26 @@ def _credential_env() -> dict[str, str]:
     return values
 
 def host_name() -> str:
-    return os.getenv(HOST_ENV, "generic").strip().lower() or "generic"
+    return os.getenv(HOST_ENV, "").strip().lower()
 
-def host_config(default: str | Path = ".") -> HostConfig:
+def host_config(default: str | Path = ".") -> HostConfig | None:
     root = Path(default).expanduser().resolve()
     name = host_name()
     home = Path.home()
+    if name not in {"codex", "openclaw", "hermes"}:
+        return None
     bases = {"codex": Path(os.getenv("CODEX_HOME", str(home / ".codex"))),
              "openclaw": Path(os.getenv("OPENCLAW_HOME", str(home / ".openclaw"))),
              "hermes": Path(os.getenv("HERMES_HOME", str(home / ".hermes")))}
-    base = bases.get(name, root / ".psi")
-    exe = os.getenv(name.upper() + "_EXECUTABLE") if name in bases else None
+    base = bases[name]
+    exe = os.getenv(name.upper() + "_EXECUTABLE")
     source_roots = {'codex': Path('/public/home/sychen/cxy/open_source_agents/codex/bin/codex.js'), 'openclaw': Path('/public/home/sychen/cxy/open_source_agents/openclaw/openclaw.mjs'), 'hermes': Path('/public/home/sychen/cxy/open_source_agents/hermes-agent')}
     source = source_roots.get(name)
-    exe = exe or (shutil.which(name) if name in bases else None)
+    exe = exe or shutil.which(name)
     if not exe and source and source.exists():
         exe = str(source)
+    if not exe:
+        return None
     workspace = Path(os.getenv(WORKSPACE_ENV, os.getenv(name.upper() + "_WORKSPACE", str(root))))
     tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
     state = Path(os.getenv(STATE_ENV, str(base / "state")))
@@ -68,18 +72,36 @@ def host_config(default: str | Path = ".") -> HostConfig:
         if venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
     return HostConfig(name, exe, workspace, tools, state, command, env)
 
-def workspace_dir(default): return host_config(default).workspace
-def tools_dir(default): return host_config(default).tools_dir
-def state_dir(default): return host_config(default).state_dir
+def workspace_dir(default):
+    config = host_config(default)
+    return None if config is None else config.workspace
 
-def run_host(args=(), default=".") -> subprocess.CompletedProcess[str]:
+def tools_dir(default):
+    config = host_config(default)
+    return None if config is None else config.tools_dir
+
+def state_dir(default):
+    config = host_config(default)
+    return None if config is None else config.state_dir
+
+def host_available(default=".") -> bool:
+    return host_config(default) is not None
+
+def run_host(args=(), default=".") -> subprocess.CompletedProcess[str] | None:
     cfg = host_config(default)
+    if cfg is None:
+        return None
     if not cfg.executable:
-        raise FileNotFoundError(f"{cfg.name} executable not found; set {cfg.name.upper()}_EXECUTABLE")
+        return None
     return subprocess.run((*cfg.command, *tuple(args)), cwd=cfg.workspace, env={**os.environ, **cfg.env}, text=True, capture_output=True, check=False)
 
 def set_ai_socket_provider(provider): _ai_socket_provider.set(provider)
-def ai_socket(default_provider): return (_ai_socket_provider.get() or default_provider)()
+def ai_socket(default_provider=None):
+    provider = _ai_socket_provider.get()
+    return None if provider is None else provider()
+
 def set_agent_factory(factory): _agent_factory.set(factory)
-def agent_handle(config, default_factory): return (_agent_factory.get() or default_factory)(config)
+def agent_handle(config, default_factory=None):
+    factory = _agent_factory.get()
+    return None if factory is None else factory(config)
 

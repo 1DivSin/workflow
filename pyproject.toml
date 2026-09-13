@@ -8,8 +8,13 @@ version = "0.1.0"
 description = "Host agnostic dynamic workflow runtime"
 requires-python = ">=3.11"
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["run_flow", "flow_manage", "workflow_sample"]
+
 [tool.setuptools.packages.find]
-include = ["fusion_flow*"]
+where = ["src"]
+include = ["fusion_flow*", "installer*"]
 [tool.ruff]
 line-length = 100
 target-version = 'py311'
@@ -18,3 +23,6 @@ target-version = 'py311'
 python_version = '3.11'
 ignore_missing_imports = true
 check_untyped_defs = true
+
+[tool.setuptools.data-files]
+"share/dynamic-workflow" = ["src/SKILL.md"]
