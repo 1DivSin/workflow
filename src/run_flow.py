@@ -620,39 +620,30 @@ class _AgentSessionAdapter:
         config_token = _CURRENT_AGENT_CONFIG.set(config)
         try:
             host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
-        if host_name == "codex":
-            client = CodexAppServerClient(command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()), cwd=str(_workspace_dir()))
-            await client.start(); chunks: list[str] = []
-            async for event in client.prompt(str(_workspace_dir()), invocation.prompt):
-                def collect(value: object) -> None:
-                    if isinstance(value, str): chunks.append(value)
-                    elif isinstance(value, dict):
-                        for item in value.values(): collect(item)
-                    elif isinstance(value, list):
-                        for item in value: collect(item)
-                collect(event.params)
-            await client.close()
-            outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
-        elif host_name == "hermes":
+            if host_name == "codex":
+                client = CodexAppServerClient(command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()), cwd=str(_workspace_dir()))
+                await client.start(); chunks: list[str] = []
+                async for event in client.prompt(str(_workspace_dir()), invocation.prompt):
+                    def collect(value: object) -> None:
+                        if isinstance(value, str): chunks.append(value)
+                        elif isinstance(value, dict):
+                            for item in value.values(): collect(item)
+                        elif isinstance(value, list):
+                            for item in value: collect(item)
+                    collect(event.params)
+                await client.close()
+                outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
+            elif host_name == "hermes":
                 client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(_workspace_dir()))
-                await client.start()
-                session_id = await client.new_session(str(_workspace_dir()))
-                chunks: list[str] = []
+                await client.start(); session_id = await client.new_session(str(_workspace_dir())); chunks: list[str] = []
                 async for event in client.prompt(session_id, invocation.prompt):
-                    update = event.params.get("update", event.params)
-                    content = update.get("content") if isinstance(update, dict) else None
+                    update = event.params.get("update", event.params); content = update.get("content") if isinstance(update, dict) else None
                     if isinstance(content, str): chunks.append(content)
-                    elif isinstance(content, list):
-                        chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+                    elif isinstance(content, list): chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
                 await client.close()
                 outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
             else:
-                outputs = await _complete_agent_step(
-                    invocation.prompt,
-                    context,
-                    ai_socket=self._ai_socket,
-                    tool_registry=tool_registry,
-                )
+                outputs = await _complete_agent_step(invocation.prompt, context, ai_socket=self._ai_socket, tool_registry=tool_registry)
         finally:
             _CURRENT_AGENT_CONFIG.reset(config_token)
         encoded = json.dumps(
