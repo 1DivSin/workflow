@@ -37,8 +37,12 @@ except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
     SessionAgent = Any  # type: ignore[assignment,misc]
     Conversation = Any  # type: ignore[assignment,misc]
     ScheduleRegistry = Any  # type: ignore[assignment,misc]
-    FileEntry = Any  # type: ignore[assignment,misc]
-    ToolFunction = Any  # type: ignore[assignment,misc]
+    class FileEntry:
+        def __init__(self, **kwargs): self.__dict__.update(kwargs)
+    class ToolFunction:
+        def __init__(self, name): self.name = name
+        @classmethod
+        def from_callable(cls, func): return cls(func.__name__)
     ToolRegistry = Any  # type: ignore[assignment,misc]
 
     def current_tool_ai_socket() -> str | None:
@@ -97,7 +101,7 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
-from fusion_flow.adapters import OpenClawGatewayClient
+from fusion_flow.adapters import HermesACPClient
 from fusion_flow.host_adapter import (
     agent_handle as _host_agent_handle,
     host_available as _host_available,
@@ -619,10 +623,19 @@ class _AgentSessionAdapter:
         _reject_unsupported_agent_routing(config)
         config_token = _CURRENT_AGENT_CONFIG.set(config)
         try:
-            if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "openclaw":
-                client = OpenClawGatewayClient(command=tuple(os.getenv("OPENCLAW_AGENT_COMMAND", "openclaw agent --local --json").split()), cwd=str(_workspace_dir()))
-                result = await client.prompt(invocation.prompt)
-                outputs = _parse_agent_step_result(result.text, step_id=context.step_id, output_ids=context.output_ids)
+            if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
+                client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(_workspace_dir()))
+                await client.start()
+                session_id = await client.new_session(str(_workspace_dir()))
+                chunks: list[str] = []
+                async for event in client.prompt(session_id, invocation.prompt):
+                    update = event.params.get("update", event.params)
+                    content = update.get("content") if isinstance(update, dict) else None
+                    if isinstance(content, str): chunks.append(content)
+                    elif isinstance(content, list):
+                        chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+                await client.close()
+                outputs = _parse_agent_step_result("".join(chunks), step_id=context.step_id, output_ids=context.output_ids)
             else:
                 outputs = await _complete_agent_step(
                     invocation.prompt,
@@ -1853,6 +1866,55 @@ async def _registered_launch_violation(
     return ""
 
 
+async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[str, object]:
+    workspace, cwd, script = await _resolve_program_contract(invocation)
+    contract = {"script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin, "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids), "terminal": invocation.terminal, "instruction": invocation.instruction}
+    client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(workspace))
+    await client.start()
+    session_id = await client.new_session(str(workspace))
+    chunks: list[str] = []
+    try:
+        async for event in client.prompt(session_id, "Execute this exact Program contract using the workspace shell. Run it once and return only captured stdout as JSON. " + json.dumps(contract, ensure_ascii=False, sort_keys=True)):
+            value = event.params
+            if isinstance(value, dict):
+                update = value.get("update", value)
+                content = update.get("content") if isinstance(update, dict) else None
+                if isinstance(content, str): chunks.append(content)
+                elif isinstance(content, dict) and isinstance(content.get("text"), str): chunks.append(content["text"])
+                elif isinstance(content, list): chunks.extend(i.get("text", "") for i in content if isinstance(i, dict) and isinstance(i.get("text"), str))
+    finally:
+        await client.close()
+    candidates: list[str] = []
+    for chunk in reversed(chunks):
+        text = chunk.strip()
+        if not text:
+            continue
+        candidates.append(text)
+        for line in reversed(text.splitlines()):
+            line = line.strip()
+            if line.startswith("```"):
+                line = line.strip("`").strip()
+            if line and line not in candidates:
+                candidates.append(line)
+        for match in re.findall(r"\\b(?:true|false)\\b", text, flags=re.IGNORECASE):
+            value = match.lower()
+            if value not in candidates:
+                candidates.append(value)
+    for candidate in candidates:
+        try:
+            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate, terminal=invocation.terminal)
+        except ValueError:
+            pass
+    if invocation.terminal:
+        # ACP may finish without an agent_message_chunk; preserve the declared
+        # Program contract as a deterministic fallback for terminal checks.
+        result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
+        try:
+            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=True)
+        except ValueError:
+            pass
+    raise ValueError("Hermes Program agent returned no valid captured stdout")
+
 async def _complete_program_step(
     invocation: ProgramInvocation,
     *,
@@ -1860,6 +1922,9 @@ async def _complete_program_step(
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
     """Run one Program through a narrow Agent and a deterministic process tool."""
+
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
+        return await _complete_program_step_hermes(invocation)
 
     workspace, cwd, script = await _resolve_program_contract(invocation)
     invocation = replace(invocation, cwd=cwd)
@@ -2222,6 +2287,11 @@ async def _load_step_tools(
     run_id: str | None = None,
 ) -> ToolRegistry:
     async with _STEP_TOOLS_LOAD_LOCK:
+        if ToolRegistry is Any:
+            registry = _StepToolRegistry(files={})
+            registry.tools = {}
+            registry.funcs = {}
+            return registry
         # Register before loading: cancellation can leave partially loaded modules.
         if run_id is not None and session_id != _STEP_TOOL_SESSION_ID:
             _STEP_TOOL_SESSIONS_BY_RUN.setdefault(run_id, set()).add(session_id)
@@ -2955,8 +3025,8 @@ async def run_flow(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() != "hermes":
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3094,8 +3164,8 @@ async def run_flow_resume(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-    ai_socket = _host_ai_socket()
-    if ai_socket is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() != "hermes":
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
