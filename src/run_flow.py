@@ -62,7 +62,14 @@ for _import_dir in (_TOOLS_DIR, _SKILL_DIR):
     if str(_import_dir) not in sys.path:
         sys.path.insert(0, str(_import_dir))
 
-_paths = __import__("_runtime_paths")
+try:
+    _paths = __import__("_runtime_paths")
+except ModuleNotFoundError:  # standalone dynamic-workflow package
+    class _StandalonePaths:
+        @staticmethod
+        def workspace_dir() -> str:
+            return os.getenv("PSI_WORKFLOW_WORKSPACE", os.getcwd())
+    _paths = _StandalonePaths()
 
 from fusion_flow.artifact_store import ArtifactStore  # noqa: E402
 from fusion_flow.contracts import Diagnostic  # noqa: E402
