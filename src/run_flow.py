@@ -97,6 +97,7 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
+from fusion_flow.adapters import OpenClawGatewayClient
 from fusion_flow.host_adapter import (
     agent_handle as _host_agent_handle,
     host_available as _host_available,
@@ -618,12 +619,17 @@ class _AgentSessionAdapter:
         _reject_unsupported_agent_routing(config)
         config_token = _CURRENT_AGENT_CONFIG.set(config)
         try:
-            outputs = await _complete_agent_step(
-                invocation.prompt,
-                context,
-                ai_socket=self._ai_socket,
-                tool_registry=tool_registry,
-            )
+            if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "openclaw":
+                client = OpenClawGatewayClient(command=tuple(os.getenv("OPENCLAW_AGENT_COMMAND", "openclaw agent --local --json").split()), cwd=str(_workspace_dir()))
+                result = await client.prompt(invocation.prompt)
+                outputs = _parse_agent_step_result(result.text, step_id=context.step_id, output_ids=context.output_ids)
+            else:
+                outputs = await _complete_agent_step(
+                    invocation.prompt,
+                    context,
+                    ai_socket=self._ai_socket,
+                    tool_registry=tool_registry,
+                )
         finally:
             _CURRENT_AGENT_CONFIG.reset(config_token)
         encoded = json.dumps(
