@@ -1,35 +1,44 @@
--- Q-17 fixed eight commit foreach, ordered reduce, Human choice
+-- Q-17 fixed eight commit foreach, independent Agent analysis, reduce, Human choice
 const commits: Artifact;
 const item: Artifact;
 const report: Artifact;
-
+const analysis_item: Artifact;
+const analysis: Artifact;
 const timeline: Artifact;
 const choice: Artifact;
 const inspect: Step;
+const analyze: Step;
 const reduce: Step;
 const choose: Step;
 const inspector: Program, Executor;
+const analyzer: Agent, Executor;
 const reducer: Program, Executor;
 const human: Human, Executor;
 workflow q17 {
  input_workflow(q17) == [commits];
  foreach_item(inspect, commits) == item;
  produces(inspect) == [report];
+ foreach_item(analyze, report) == analysis_item;
+ produces(analyze) == [analysis];
  produces(reduce) == [timeline];
- consumes(reduce) == [report];
+ consumes(analyze) == [report];
+ consumes(reduce) == [analysis];
  consumes(choose) == [timeline];
  produces(choose) == [choice];
  output_workflow(q17) == [choice];
  step_executor(inspect) == inspector;
+ step_executor(analyze) == analyzer;
  step_executor(reduce) == reducer;
  step_executor(choose) == human;
  program_path(inspector) == "./flows/q17/show_item.py";
  program_path(reducer) == "./flows/q17/reduce.py";
  step_name(inspect) == "Inspect commit";
  step_instruction(inspect) == "Run the exact git show command for this commit and preserve stdout.";
+ step_name(analyze) == "Analyze one commit";
+ step_instruction(analyze) == "Analyze only the supplied commit evidence and return JSON keyed by analysis.";
  step_name(reduce) == "Reduce timeline";
  step_instruction(reduce) == "Preserve source order and identify three highest risk transitions.";
  step_name(choose) == "Choose regression direction";
  step_instruction(choose) == "Ask: choose a regression direction. Options: 接受前三名, 优先 Session/compaction, 优先 Router/协议, 优先 Workflow/Gateway.";
- max_concurrency(q17) == 8;
+ max_concurrency(q17) == 2;
 }
