@@ -32,7 +32,7 @@ class OpenClawGatewayClient:
             raise RuntimeError(f"OpenClaw gateway expected challenge, got {challenge!r}")
         params: dict[str, Any] = {
             "minProtocol": 4, "maxProtocol": 4,
-            "client": {"id": "cli", "version": "workflow", "platform": "linux", "mode": "operator"},
+            "client": {"id": "cli", "version": "workflow", "platform": "linux", "mode": "backend"},
             "role": "operator", "scopes": ["operator.read", "operator.write"],
             "caps": [], "commands": [], "permissions": {},
         }
