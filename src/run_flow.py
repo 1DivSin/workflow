@@ -415,6 +415,9 @@ class _AgentStepResultParseError(ValueError):
 
 
 class _StepToolRegistry(ToolRegistry):
+    def get(self, name: str) -> ToolFunction | None:
+        return self.funcs.get(name)
+
     async def refresh(self) -> dict[str, str]:
         return {}
 
@@ -2759,6 +2762,39 @@ async def _prepare_human_step(
     ai_socket: str,
     tool_registry: ToolRegistry,
 ) -> str:
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
+        client = HermesACPClient(
+            command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
+            cwd=str(_workspace_dir()),
+        )
+        await client.start()
+        session_id = await client.new_session(str(_workspace_dir()))
+        message = (
+            "Prepare one request for the person responsible for this Human step.\n"
+            f"Step: {context.step_id}\n"
+            f"Output artifact IDs: {json.dumps(context.output_ids, ensure_ascii=False)}\n"
+            f"{prompt}\n"
+            "Respond with exactly one JSON object with exactly these keys: "
+            '{"question":"...","options":[],"recommended":0,"default":""}. ' 
+            "options may contain at most four strings; recommended is a 1-based option index or 0; "
+            "default is only for open-ended input. Do not add Markdown or prose."
+        )
+        chunks: list[str] = []
+        try:
+            async for event in client.prompt(session_id, message):
+                value = event.params
+                update = value.get("update", value) if isinstance(value, dict) else {}
+                content = update.get("content") if isinstance(update, dict) else None
+                if isinstance(content, str):
+                    chunks.append(content)
+                elif isinstance(content, dict) and isinstance(content.get("text"), str):
+                    chunks.append(content["text"])
+                elif isinstance(content, list):
+                    chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+        finally:
+            await client.close()
+        return _prepared_question_json(_parse_prepared_human_question("".join(chunks)))
+
     agent, conversation = await _create_step_agent(
         ai_socket,
         tool_registry,
