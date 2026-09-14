@@ -5,8 +5,8 @@ Host-agnostic workflow runtime with shared provider routing and host adapters fo
 ## Requirements
 
 - Node.js 18 or newer
-- Python 3.11 or newer
-- uv for isolated Python environments
+- Python 3.12 or newer
+- uv or Miniconda
 
 ## Installation
 
@@ -18,16 +18,19 @@ cd workflow
 npm install
 ~~~
 
-Create a Python environment and install the project:
+Create a Python environment and install the project. Python 3.12 is required by the current workflow source:
 
 ~~~bash
-uv venv --python 3.11
-uv pip install -e .
+conda create -n agent-workflow-test312 python=3.12 -y
+conda activate agent-workflow-test312
+python -m pip install -e . --no-deps
+python -m pip install pytest
 ~~~
 
 Run the repository checks:
 
 ~~~bash
+python -m compileall -q src installer
 npm test
 ~~~
 
@@ -57,13 +60,60 @@ The provider loader supports baseURLs, apiKeys, and models roles. A model such a
 
 ## Host adapters
 
-The runtime detects the selected host with PSI_WORKFLOW_HOST:
+Select the runtime host with PSI_WORKFLOW_HOST:
 
 ~~~bash
-export PSI_WORKFLOW_HOST=codex      # or openclaw or hermes
-python -m installer.cli detect
-python -m installer.cli doctor
+export PSI_WORKFLOW_HOST=codex      # Codex app-server
+export PSI_WORKFLOW_HOST=hermes     # Hermes ACP
+export PSI_WORKFLOW_HOST=openclaw   # OpenClaw gateway
 ~~~
+
+The runtime can be invoked directly from Python:
+
+~~~bash
+python - <<'PY'
+import asyncio, json
+from src.run_flow import run_flow
+
+result = asyncio.run(run_flow(
+    "flows/q08/q08.workflow",
+    json.dumps({"state": {"epoch": 0}}),
+    max_loop_epochs=3,
+))
+print(result)
+PY
+~~~
+
+### Codex app-server
+
+Codex steps use the JSONL app-server transport. Set the executable explicitly when it is not on PATH:
+
+~~~bash
+export CODEX_APP_SERVER_COMMAND="/path/to/codex app-server --stdio"
+~~~
+
+The adapter waits for turn/completed and extracts only item/agentMessage/delta events. This prevents thread metadata and command execution events from being mistaken for the Agent final response. Agent TerminalStep output is checked as strict JSON Boolean data; invalid output enters a bounded repair path.
+
+### Hermes ACP
+
+Set the Hermes ACP executable:
+
+~~~bash
+export HERMES_ACP_COMMAND="/path/to/hermes-acp"
+export PSI_WORKFLOW_HERMES_SESSION_TIMEOUT=90
+~~~
+
+Hermes Program steps execute the declared script deterministically with the workflow stdin and cwd. Agent TerminalStep and Human preparation responses are parsed against their strict JSON contracts, with bounded repair for invalid Agent output.
+
+### Diagnostics
+
+For Codex event diagnostics, set an event log path through the adapter environment:
+
+~~~bash
+export CODEX_EVENT_LOG="/tmp/codex-events.jsonl"
+~~~
+
+The log records event methods, parameter keys, and Agent message deltas without recording command output. A run stores artifacts and timing data under its workflow run directory. Do not commit run directories or files containing private repository contents.
 
 Install and remove the host integration with:
 
@@ -80,4 +130,3 @@ The host adapter reads the shared provider configuration and passes the resolved
 python -m compileall -q src installer
 npm test
 ~~~
-
