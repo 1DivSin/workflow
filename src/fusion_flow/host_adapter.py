@@ -2,10 +2,15 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from contextvars import ContextVar
-import os, shutil, subprocess
+import os
+import shutil
+import subprocess
 from .providers import provider_environment
+
+if TYPE_CHECKING:
+    from .agent_runtime import AgentRuntime
 
 HOST_ENV = "PSI_WORKFLOW_HOST"
 WORKSPACE_ENV = "PSI_WORKFLOW_WORKSPACE"
@@ -24,6 +29,9 @@ class HostConfig:
 
 _ai_socket_provider: ContextVar[Callable[[], str | None] | None] = ContextVar("ai_socket", default=None)
 _agent_factory: ContextVar[Callable[[object], object] | None] = ContextVar("agent_factory", default=None)
+_agent_runtime_provider: ContextVar[Callable[[], "AgentRuntime | None"] | None] = ContextVar(
+    "agent_runtime", default=None
+)
 
 def _credential_env() -> dict[str, str]:
     path = Path(os.getenv('PSI_WORKFLOW_CREDENTIALS', str(Path.home() / '.config/genuineknowledge/agents.env')))
@@ -33,7 +41,8 @@ def _credential_env() -> dict[str, str]:
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 key, value = line.split('=', 1)
-                if value.strip(): values[key.strip()] = value.strip().strip(chr(34)).strip(chr(39))
+                if value.strip():
+                    values[key.strip()] = value.strip().strip(chr(34)).strip(chr(39))
     return values
 
 def host_name() -> str:
@@ -69,7 +78,8 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     if name == 'hermes':
         env['PYTHONPATH'] = str(source_roots['hermes']) + os.pathsep + os.getenv('PYTHONPATH', '')
         venv = source_roots['hermes'] / '.venv' / 'bin' / 'python'
-        if venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
+        if venv.exists():
+            command = (str(venv), '-m', 'hermes_cli.main')
     return HostConfig(name, exe, workspace, tools, state, command, env)
 
 def workspace_dir(default):
@@ -104,4 +114,23 @@ def set_agent_factory(factory): _agent_factory.set(factory)
 def agent_handle(config, default_factory=None):
     factory = _agent_factory.get()
     return None if factory is None else factory(config)
+
+
+def set_agent_runtime_provider(provider: Callable[[], "AgentRuntime | None"] | None) -> None:
+    """Set the host Agent Runtime provider for the current execution context."""
+
+    _agent_runtime_provider.set(provider)
+
+
+def agent_runtime(default: "AgentRuntime | None" = None) -> "AgentRuntime | None":
+    """Return an injected runtime, or the built-in OpenClaw CLI adapter."""
+
+    provider = _agent_runtime_provider.get()
+    if provider is not None:
+        return provider()
+    if host_name() == "openclaw":
+        from .adapters.openclaw_cli import OpenClawCliRuntime
+
+        return OpenClawCliRuntime()
+    return default
 

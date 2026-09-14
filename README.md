@@ -74,10 +74,16 @@ python -m installer.cli uninstaller
 
 The host adapter reads the shared provider configuration and passes the resolved endpoint, model, and credential environment to the selected host. Secrets must never be committed.
 
+## OpenClaw Agent Steps
+
+When `PSI_WORKFLOW_HOST=openclaw`, Agent Steps use the host-owned `openclaw agent --json` CLI. The workflow passes a stable per-step session key and sends the prompt on stdin; Gateway authentication, pairing, provider credentials, and session persistence remain OpenClaw responsibilities. No OpenClaw token is put in workflow arguments.
+
+The current OpenClaw adapter supports `Agent` executors. Workflows containing `Human` or `Program` executors still require a host runtime that implements those capabilities.
+
 ## Development checks
 
 ~~~bash
-python -m compileall -q src installer
+python -m compileall -q src
 npm test
 ~~~
 
