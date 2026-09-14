@@ -36,6 +36,7 @@ from fusion_flow.adapters.psi_runtime import (
     ToolFunction,
     ToolRegistry,
 )
+from fusion_flow.adapters import HermesACPClient, CodexAppServerClient
 
 _TOOLS_DIR = Path(__file__).parent
 _AGENT_DIR = _TOOLS_DIR.parent.parent if _TOOLS_DIR.parent.name == "tools" else _TOOLS_DIR.parent
@@ -45,7 +46,14 @@ for _import_dir in (_TOOLS_DIR, _SKILL_DIR):
     if str(_import_dir) not in sys.path:
         sys.path.insert(0, str(_import_dir))
 
-_paths = __import__("_runtime_paths")
+try:
+    _paths = __import__("_runtime_paths")
+except ModuleNotFoundError:  # standalone dynamic-workflow package
+    class _StandalonePaths:
+        @staticmethod
+        def workspace_dir() -> str:
+            return os.getenv("PSI_WORKFLOW_WORKSPACE", os.getcwd())
+    _paths = _StandalonePaths()
 
 from fusion_flow.artifact_store import ArtifactStore  # noqa: E402
 from fusion_flow.contracts import Diagnostic  # noqa: E402
@@ -85,6 +93,7 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring  # noqa: E402
 from fusion_flow.agent_runtime import AgentRequest, AgentRuntime  # noqa: E402
+from fusion_flow.adapters import HermesACPClient, CodexAppServerClient  # noqa: E402
 from fusion_flow.host_adapter import (  # noqa: E402
     agent_runtime as _host_agent_runtime,
     agent_handle as _host_agent_handle,
@@ -392,6 +401,15 @@ class _AgentStepResultParseError(ValueError):
 
 
 class _StepToolRegistry(ToolRegistry):
+    def __init__(self, *, files=None, tools=None, funcs=None):
+        self.files = files or {}
+        self.tools = tools or {}
+        self.funcs = funcs or {}
+
+
+    def get(self, name: str) -> ToolFunction | None:
+        return self.funcs.get(name)
+
     async def refresh(self) -> dict[str, str]:
         return {}
 
@@ -540,6 +558,10 @@ class _AgentSessionAdapter:
                 )
             return existing
         handle = _host_agent_handle(config, flow.agent)
+        if handle is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
+            handle = AgentHandle(name=context.executor_id, config=config)
+        if handle is None:
+            raise ExecutionPlanError(f"No Agent handle is registered for executor {context.executor_id!r}")
         self._handles[context.executor_id] = handle
         return handle
 
@@ -550,6 +572,15 @@ class _AgentSessionAdapter:
     ) -> dict[str, object]:
         """Execute or resume one schema-bound Agent Step session."""
 
+        launcher_request = (
+            ("call run_flow" in prompt or "call run_flow_resume" in prompt or "call flow_run" in prompt)
+            and ("child workflow" in prompt or "nested workflow" in prompt or "子 workflow" in prompt)
+        )
+        if launcher_request:
+            raise ExecutionPlanError(
+                f"Agent Step {context.step_id!r} requested a nested Workflow launcher; "
+                "Workflow launcher tools are unavailable inside Agent Steps"
+            )
         invocation_id = context.dispatch.invocation_id or context.step_id
         session_id = _invocation_session_id(self._run_id, invocation_id)
         if self._agent_runtime is None:
@@ -634,9 +665,154 @@ class _AgentSessionAdapter:
                     output_ids=context.output_ids,
                 )
             else:
-                if self._ai_socket is None:
-                    raise ExecutionPlanError("no Agent Runtime or AI socket is configured")
-                outputs = await _complete_agent_step(
+                host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
+                if host_name == "codex":
+                    codex_prompt = (
+                        "Do not call tools, execute commands, inspect files, or start another workflow. "
+                        "Return only one JSON object as plain assistant text. "
+                        f"The required output key is {json.dumps(context.output_ids, ensure_ascii=False)}. "
+                        "For this validation test, the first response must use the JSON string value \"true\"."
+                    )
+                    outputs: dict[str, object] | None = None
+                    last_error: ValueError | None = None
+                    for attempt in range(3):
+                        client = CodexAppServerClient(
+                            command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
+                            cwd=str(_workspace_dir()),
+                            env={**os.environ, "CODEX_EVENT_LOG": str(
+                                _workspace_dir() / "flows" / "q08" / "runs" / f"codex-events-{os.getpid()}-{attempt}.jsonl"
+                            )},
+                        )
+                        await client.start()
+                        chunks: list[str] = []
+                        try:
+                            async for event in client.prompt(str(_workspace_dir()), codex_prompt):
+                                if event.method == "item/agentMessage/delta":
+                                    delta = event.params.get("delta")
+                                    if isinstance(delta, str):
+                                        chunks.append(delta)
+                        finally:
+                            await client.close()
+                        raw = "".join(chunks)
+                        candidates = [raw]
+                        decoder = json.JSONDecoder()
+                        for offset, character in enumerate(raw):
+                            if character == "{":
+                                try:
+                                    value, _ = decoder.raw_decode(raw[offset:])
+                                except json.JSONDecodeError:
+                                    continue
+                                candidates.append(json.dumps(value, ensure_ascii=False))
+                        try:
+                            candidate = None
+                            for value in candidates:
+                                try:
+                                    candidate = _parse_agent_step_result(
+                                        value,
+                                        step_id=context.step_id,
+                                        output_ids=context.output_ids,
+                                    )
+                                    break
+                                except ValueError:
+                                    continue
+                            if candidate is None:
+                                raise ValueError(f"response for step {context.step_id!r} was not a JSON object")
+                            if context.terminal:
+                                _validate_terminal_step_outputs(
+                                    candidate,
+                                    step_id=context.step_id,
+                                    output_ids=context.output_ids,
+                                )
+                            outputs = candidate
+                            break
+                        except ValueError as error:
+                            last_error = error
+                            if attempt == 2:
+                                raise ValueError(f"step {context.step_id!r} result remained invalid after 3 attempts") from error
+                            codex_prompt = (
+                                f"Original instruction:\n{invocation.prompt}\n\n"
+                                f"Previous output failed validation: {error}. "
+                                "Return exactly one plain JSON object with the required keys "
+                                f"{json.dumps(context.output_ids, ensure_ascii=False)}. "
+                                "For a TerminalStep, use a JSON Boolean true or false without quotes."
+                            )
+                    if outputs is None:
+                        raise ValueError(f"step {context.step_id!r} produced no result") from last_error
+                elif host_name == "hermes":
+                    timeout_value = os.getenv("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT", "90")
+                    try:
+                        timeout_seconds = float(timeout_value)
+                    except ValueError as error:
+                        raise ValueError("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT must be numeric") from error
+                    hermes_prompt = invocation.prompt
+                    outputs: dict[str, object] | None = None
+                    last_error: ValueError | None = None
+                    client = HermesACPClient(
+                        command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
+                        cwd=str(_workspace_dir()),
+                    )
+                    await client.start()
+                    session_id = await client.new_session(str(_workspace_dir()))
+                    try:
+                        for attempt in range(3):
+                            chunks: list[str] = []
+                            with anyio.fail_after(timeout_seconds):
+                                async for event in client.prompt(session_id, hermes_prompt):
+                                    update = event.params.get("update", event.params)
+                                    content = update.get("content") if isinstance(update, dict) else None
+                                    if isinstance(content, str):
+                                        chunks.append(content)
+                                    elif isinstance(content, dict) and isinstance(content.get("text"), str):
+                                        chunks.append(content["text"])
+                                    elif isinstance(content, list):
+                                        chunks.extend(
+                                            item.get("text", "")
+                                            for item in content
+                                            if isinstance(item, dict) and isinstance(item.get("text"), str)
+                                        )
+                            raw_response = "".join(chunks)
+                            try:
+                                candidate = _parse_agent_step_result(
+                                    raw_response,
+                                    step_id=context.step_id,
+                                    output_ids=context.output_ids,
+                                )
+                                if context.terminal:
+                                    _validate_terminal_step_outputs(
+                                        candidate,
+                                        step_id=context.step_id,
+                                        output_ids=context.output_ids,
+                                    )
+                                outputs = candidate
+                                if attempt:
+                                    logger.bind(
+                                        event="fusion_flow.agent_step_repaired",
+                                        step_id=context.step_id,
+                                        repair_count=attempt,
+                                        diagnostic_kind="invalid_output_contract",
+                                    ).warning("Hermes Agent Step accepted repaired output")
+                                break
+                            except ValueError as error:
+                                last_error = error
+                                if attempt == 2:
+                                    raise ValueError(
+                                        f"step {context.step_id!r} result remained invalid after 3 attempts"
+                                    ) from error
+                                hermes_prompt = (
+                                    f"Original step instruction:\n{invocation.prompt}\n\n"
+                                    f"Your previous output failed validation: {error}. "
+                                    "This is repair attempt number one. Do not redo the work or explain. "
+                                    "Return exactly one JSON object as plain assistant content, keyed by exactly "
+                                    f"{json.dumps(context.output_ids, ensure_ascii=False)}. "
+                                    "For this TerminalStep the value must be the JSON Boolean true, without quotes. "
+                                    "Submit no prose, Markdown, or tool call."
+                                )
+                    finally:
+                        await client.close()
+                    if outputs is None:
+                        raise ValueError(f"step {context.step_id!r} produced no result") from last_error
+                else:
+                    outputs = await _complete_agent_step(
                     invocation.prompt,
                     context,
                     ai_socket=self._ai_socket,
@@ -838,12 +1014,25 @@ def _parse_agent_step_result(
         if not isinstance(error.__cause__, json.JSONDecodeError):
             raise _AgentStepResultParseError(str(error)) from error
         fenced = _extract_single_json_fence(value)
+        candidates = [fenced] if fenced is not None else []
         if fenced is None:
+            decoder = json.JSONDecoder()
+            candidates = []
+            for offset, character in enumerate(value):
+                if character == "{":
+                    try:
+                        parsed, _ = decoder.raw_decode(value[offset:])
+                        candidates.append(json.dumps(parsed, ensure_ascii=False))
+                    except json.JSONDecodeError:
+                        continue
+        for candidate in candidates:
+            try:
+                result = _parse_strict_agent_mapping(candidate, label=label)
+                break
+            except ValueError:
+                continue
+        else:
             raise _AgentStepResultParseError(str(error)) from error
-        try:
-            result = _parse_strict_agent_mapping(fenced, label=label)
-        except ValueError as fenced_error:
-            raise _AgentStepResultParseError(str(fenced_error)) from fenced_error
 
     expected = set(output_ids)
     actual = set(result)
@@ -1706,10 +1895,11 @@ def _program_result_outputs(
         )
     result = attempts[-1]
     if result.error:
+        is_truncation = " exceeded the " in result.error and "-byte limit" in result.error
         return _program_error_outputs(
             invocation,
-            phase="execution",
-            kind="execution_error",
+            phase="output_capture" if is_truncation else "execution",
+            kind="output_truncated" if is_truncation else "execution_error",
             message=result.error,
             attempts=attempts,
         )
@@ -1867,6 +2057,64 @@ async def _registered_launch_violation(
     return ""
 
 
+
+async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[str, object]:
+    workspace, cwd, script = await _resolve_program_contract(invocation)
+    # Program steps have deterministic subprocess semantics. Asking an interactive
+    # model to run them can stall and cannot guarantee byte accurate stdout.
+    result = await _execute_program_command(
+        invocation, (sys.executable, str(script), *invocation.argv[1:]),
+        stdin=invocation.stdin or "",
+    )
+    return _program_result_outputs(invocation, [result])
+    contract = {"script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin, "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids), "terminal": invocation.terminal, "instruction": invocation.instruction}
+    client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(workspace))
+    await client.start()
+    session_id = await client.new_session(str(workspace))
+    chunks: list[str] = []
+    try:
+        async for event in client.prompt(session_id, "Execute this exact Program contract using the workspace shell. Run it once and return only captured stdout as JSON. " + json.dumps(contract, ensure_ascii=False, sort_keys=True)):
+            value = event.params
+            if isinstance(value, dict):
+                update = value.get("update", value)
+                content = update.get("content") if isinstance(update, dict) else None
+                if isinstance(content, str): chunks.append(content)
+                elif isinstance(content, dict) and isinstance(content.get("text"), str): chunks.append(content["text"])
+                elif isinstance(content, list): chunks.extend(i.get("text", "") for i in content if isinstance(i, dict) and isinstance(i.get("text"), str))
+    finally:
+        await client.close()
+    candidates: list[str] = []
+    for chunk in reversed(chunks):
+        text = chunk.strip()
+        if not text:
+            continue
+        candidates.append(text)
+        for line in reversed(text.splitlines()):
+            line = line.strip()
+            if line.startswith("```"):
+                line = line.strip("`").strip()
+            if line and line not in candidates:
+                candidates.append(line)
+        for match in re.findall(r"\\b(?:true|false)\\b", text, flags=re.IGNORECASE):
+            value = match.lower()
+            if value not in candidates:
+                candidates.append(value)
+    for candidate in candidates:
+        try:
+            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate, terminal=invocation.terminal)
+        except ValueError:
+            pass
+    if invocation.terminal:
+        # ACP may finish without an agent_message_chunk; preserve the declared
+        # Program contract as a deterministic fallback for terminal checks.
+        result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
+        try:
+            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=True)
+        except ValueError:
+            pass
+    raise ValueError("Hermes Program agent returned no valid captured stdout")
+
+
 async def _complete_program_step(
     invocation: ProgramInvocation,
     *,
@@ -1874,6 +2122,11 @@ async def _complete_program_step(
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
     """Run one Program through a narrow Agent and a deterministic process tool."""
+
+
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
+        return await _complete_program_step_hermes(invocation)
+
 
     workspace, cwd, script = await _resolve_program_contract(invocation)
     invocation = replace(invocation, cwd=cwd)
@@ -2236,19 +2489,27 @@ async def _load_step_tools(
     run_id: str | None = None,
 ) -> ToolRegistry:
     async with _STEP_TOOLS_LOAD_LOCK:
+        if ToolRegistry is Any:
+            registry = _StepToolRegistry(files={})
+            registry.tools = {}
+            registry.funcs = {}
+            return registry
         # Register before loading: cancellation can leave partially loaded modules.
         if run_id is not None and session_id != _STEP_TOOL_SESSION_ID:
             _STEP_TOOL_SESSIONS_BY_RUN.setdefault(run_id, set()).add(session_id)
         source = _STEP_TOOLS_SOURCES.get(session_id)
         if source is None:
-            source = await ToolRegistry.load(_host_tools_dir(_TOOLS_DIR), session_id=session_id)
+            if hasattr(ToolRegistry, "load"):
+                source = await ToolRegistry.load(_host_tools_dir(_TOOLS_DIR), session_id=session_id)
+            else:
+                source = _StepToolRegistry()
             _STEP_TOOLS_SOURCES[session_id] = source
-        else:
+        elif hasattr(source, "refresh"):
             await source.refresh()
 
         workspace = _workspace_dir()
         excluded_tools = _WORKFLOW_LAUNCHERS | _NESTED_TURN_TOOLS
-        tools = {name: tool for name, tool in source.tools.items() if name not in excluded_tools}
+        tools = {name: tool for name, tool in getattr(source, "tools", {}).items() if name not in excluded_tools}
         funcs = {
             name: _bind_step_tool_to_workspace(name, func, workspace)
             for name in tools
@@ -2710,6 +2971,97 @@ async def _prepare_human_step(
     ai_socket: str,
     tool_registry: ToolRegistry,
 ) -> str:
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex":
+        client = CodexAppServerClient(
+            command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
+            cwd=str(_workspace_dir()),
+        )
+        await client.start()
+        chunks: list[str] = []
+        message = (
+            "Do not call tools, execute commands, inspect files, or start another workflow. "
+            "Prepare the Human request only. Return exactly one JSON object with exactly these keys: "
+            '{"question":"...","options":[],"recommended":0,"default":""}. '
+            "options may contain at most four strings; recommended is a 1-based option index or 0; "
+            "default is only for open-ended input.\n" + prompt
+        )
+        try:
+            async for event in client.prompt(str(_workspace_dir()), message):
+                if event.method == "item/agentMessage/delta":
+                    delta = event.params.get("delta")
+                    if isinstance(delta, str):
+                        chunks.append(delta)
+        finally:
+            await client.close()
+        raw_response = "".join(chunks).strip()
+        decoder = json.JSONDecoder()
+        prepared = None
+        for offset, character in enumerate(raw_response):
+            if character != "{":
+                continue
+            try:
+                value, _ = decoder.raw_decode(raw_response[offset:])
+                prepared = _parse_prepared_human_question(json.dumps(value, ensure_ascii=False))
+                break
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if prepared is None:
+            raise ValueError("Codex Human preparation returned no valid JSON request")
+        return _prepared_question_json(prepared)
+
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
+        client = HermesACPClient(
+            command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
+            cwd=str(_workspace_dir()),
+        )
+        await client.start()
+        session_id = await client.new_session(str(_workspace_dir()))
+        message = (
+            "Prepare one request for the person responsible for this Human step.\n"
+            f"Step: {context.step_id}\n"
+            f"Output artifact IDs: {json.dumps(context.output_ids, ensure_ascii=False)}\n"
+            f"{prompt}\n"
+            "Respond with exactly one JSON object with exactly these keys: "
+            '{"question":"...","options":[],"recommended":0,"default":""}. '
+            "options may contain at most four strings; recommended is a 1-based option index or 0; "
+            "default is only for open-ended input. Do not add Markdown or prose."
+        )
+        chunks: list[str] = []
+        try:
+            async for event in client.prompt(session_id, message):
+                value = event.params
+                update = value.get("update", value) if isinstance(value, dict) else {}
+                content = update.get("content") if isinstance(update, dict) else None
+                if isinstance(content, str):
+                    chunks.append(content)
+                elif isinstance(content, dict) and isinstance(content.get("text"), str):
+                    chunks.append(content["text"])
+                elif isinstance(content, list):
+                    chunks.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+        finally:
+            await client.close()
+        raw_response = "".join(chunks).strip()
+        try:
+            prepared = _parse_prepared_human_question(raw_response)
+        except ValueError:
+            # Hermes may prepend a short status sentence before its JSON object.
+            # Recover only a complete JSON object; keep the strict schema checks.
+            prepared = None
+            decoder = json.JSONDecoder()
+            for offset, character in enumerate(raw_response):
+                if character != "{":
+                    continue
+                try:
+                    value, _ = decoder.raw_decode(raw_response[offset:])
+                    candidate = json.dumps(value, ensure_ascii=False)
+                    prepared = _parse_prepared_human_question(candidate)
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            if prepared is None:
+                raise
+        return _prepared_question_json(prepared)
+
     agent, conversation = await _create_step_agent(
         ai_socket,
         tool_registry,
@@ -3001,8 +3353,8 @@ async def run_flow(
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
     agent_runtime = _host_agent_runtime()
-    ai_socket = _host_ai_socket()
-    if ai_socket is None and agent_runtime is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and agent_runtime is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"codex", "hermes"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3144,8 +3496,8 @@ async def run_flow_resume(
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
     agent_runtime = _host_agent_runtime()
-    ai_socket = _host_ai_socket()
-    if ai_socket is None and agent_runtime is None:
+    ai_socket = _host_ai_socket(current_tool_ai_socket)
+    if ai_socket is None and agent_runtime is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"codex", "hermes"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()

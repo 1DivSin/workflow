@@ -70,7 +70,19 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
     state = Path(os.getenv(STATE_ENV, str(base / "state")))
     command = ((('node', exe) if name in ('codex', 'openclaw') else ('python3', '-m', 'hermes_cli.main')) if exe else (name,))
-    env = {**_credential_env(), **os.environ, 'PSI_WORKFLOW_HOST': name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), 'PATH': '/public/home/sychen/.local/node-current/bin:' + os.getenv('PATH', '')}
+    inherited_path = os.getenv("PATH", "")
+    path_parts = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"]
+    node_bin = Path("/public/home/sychen/.local/node-current/bin")
+    if node_bin.is_dir():
+        path_parts.insert(0, str(node_bin))
+    if name == "hermes":
+        hermes_bin = Path("/public/home/sychen/cxy/open_source_agents/hermes-agent/.venv/bin")
+        if hermes_bin.is_dir():
+            path_parts.insert(0, str(hermes_bin))
+    if inherited_path:
+        path_parts.append(inherited_path)
+    stable_path = os.pathsep.join(dict.fromkeys(path_parts))
+    env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), "PATH": stable_path}
     try:
         env.update(provider_environment('default'))
     except (FileNotFoundError, RuntimeError):
