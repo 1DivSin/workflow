@@ -39,6 +39,19 @@ def _load_adapter_module():
 
 
 class OpenClawCliRuntimeTests(unittest.TestCase):
+    def test_default_command_uses_gateway_session_cli(self) -> None:
+        runtime_module, adapter_module = _load_adapter_module()
+        request = runtime_module.AgentRequest(
+            prompt="work",
+            session_id="step-1",
+            workspace=Path.cwd(),
+        )
+
+        command = adapter_module.OpenClawCliRuntime().command_for(request, message_file="prompt.txt")
+
+        self.assertEqual(command[:2], ("openclaw", "agent"))
+        self.assertIn("--session-key", command)
+
     def test_invokes_host_cli_without_gateway_credentials_in_arguments(self) -> None:
         runtime_module, adapter_module = _load_adapter_module()
         with tempfile.TemporaryDirectory() as temp:
@@ -49,10 +62,11 @@ class OpenClawCliRuntimeTests(unittest.TestCase):
                     import json
                     import sys
 
+                    message_file = next((sys.argv[i + 1] for i, value in enumerate(sys.argv[:-1]) if value == "--message-file"), None)
                     print(json.dumps({
                         "ok": True,
                         "status": "ok",
-                        "final": sys.stdin.read(),
+                        "final": open(message_file, encoding="utf-8").read(),
                         "sessionId": next((sys.argv[i + 1] for i, value in enumerate(sys.argv[:-1]) if value == "--session-key"), None),
                     }))
                     """
@@ -67,12 +81,13 @@ class OpenClawCliRuntimeTests(unittest.TestCase):
             runtime = adapter_module.OpenClawCliRuntime(
                 command=(sys.executable, str(script)),
             )
-            command = runtime.command_for(request)
+            command = runtime.command_for(request, message_file="prompt.txt")
             self.assertNotIn("--token", command)
             self.assertNotIn("--password", command)
             result = asyncio.run(
                 runtime.invoke(request)
             )
+            self.assertEqual(list(Path(temp).glob(".fusion-flow-*.prompt")), [])
 
         self.assertTrue(result.ok)
         self.assertEqual(result.text, "Reply with PONG")

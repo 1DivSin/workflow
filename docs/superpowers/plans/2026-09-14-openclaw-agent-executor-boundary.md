@@ -28,9 +28,9 @@
 - Modify: `src/fusion_flow/adapters/__init__.py`
 - Test: `tests/test_openclaw_cli.py`
 
-- [x] Add a fake Python command in the test that reads the prompt from stdin and emits the documented JSON envelope.
+- [x] Add a fake Python command in the test that reads the short-lived prompt file and emits the documented JSON envelope.
 - [x] Run the focused test and observe failure because `OpenClawCliRuntime` is absent.
-- [x] Implement async process execution with `openclaw agent --session-key ... --message-file - --json`, passing no token/password arguments.
+- [x] Implement async process execution with `openclaw agent --session-key ... --message-file <temp-file> --json`, passing no token/password arguments.
 - [x] Parse `final`, `status`, `sessionId`, usage, and structured errors; terminate on timeout.
 - [x] Run the focused test and confirm success.
 

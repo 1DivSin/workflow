@@ -120,7 +120,9 @@ def run_host(args=(), default=".") -> subprocess.CompletedProcess[str] | None:
 def set_ai_socket_provider(provider): _ai_socket_provider.set(provider)
 def ai_socket(default_provider=None):
     provider = _ai_socket_provider.get()
-    return None if provider is None else provider()
+    if provider is None:
+        return None if default_provider is None else default_provider()
+    return provider()
 
 def set_agent_factory(factory): _agent_factory.set(factory)
 def agent_handle(config, default_factory=None):

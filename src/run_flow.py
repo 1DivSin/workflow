@@ -35,6 +35,7 @@ from fusion_flow.adapters.psi_runtime import (
     SessionAgent,
     ToolFunction,
     ToolRegistry,
+    current_tool_ai_socket,
 )
 from fusion_flow.adapters import HermesACPClient, CodexAppServerClient
 
@@ -93,7 +94,6 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring  # noqa: E402
 from fusion_flow.agent_runtime import AgentRequest, AgentRuntime  # noqa: E402
-from fusion_flow.adapters import HermesACPClient, CodexAppServerClient  # noqa: E402
 from fusion_flow.host_adapter import (  # noqa: E402
     agent_runtime as _host_agent_runtime,
     agent_handle as _host_agent_handle,
@@ -557,7 +557,7 @@ class _AgentSessionAdapter:
                     f"Agent executor {context.executor_id!r} resolved to inconsistent configurations"
                 )
             return existing
-        handle = _host_agent_handle(config, flow.agent)
+        handle = flow.agent(config) if self._agent_runtime is not None else _host_agent_handle(config, flow.agent)
         if handle is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
             handle = AgentHandle(name=context.executor_id, config=config)
         if handle is None:
@@ -583,11 +583,8 @@ class _AgentSessionAdapter:
             )
         invocation_id = context.dispatch.invocation_id or context.step_id
         session_id = _invocation_session_id(self._run_id, invocation_id)
-        if self._agent_runtime is None:
-            handle = self._handle(context)
-            allowed_tools = handle.config.tools
-        else:
-            allowed_tools = () if context.agent_config is None else context.agent_config.tools
+        handle = self._handle(context)
+        allowed_tools = handle.config.tools
         selected_tools = _select_agent_tools(
             await self._get_tool_registry(session_id),
             allowed_tools,

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import replace
 from typing import Mapping, Sequence
 
@@ -20,7 +21,7 @@ class OpenClawCliRuntime:
     """Run one Agent Step through ``openclaw agent --json``.
 
     OpenClaw owns Gateway authentication, pairing, and provider credentials.
-    The workflow passes only a stable session key and the prompt on stdin.
+    The workflow passes only a stable session key and a short-lived prompt file.
     """
 
     def __init__(
@@ -48,13 +49,20 @@ class OpenClawCliRuntime:
         digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:32]
         return f"agent:{self.agent_id}:workflow:{digest}"
 
-    def command_for(self, request: AgentRequest) -> tuple[str, ...]:
+    def command_for(
+        self,
+        request: AgentRequest,
+        *,
+        message_file: str | None = None,
+    ) -> tuple[str, ...]:
+        if message_file is None:
+            raise ValueError("OpenClaw message_file is required")
         args = [
             *self.command,
             "--session-key",
             self.session_key(request.session_id),
             "--message-file",
-            "-",
+            message_file,
             "--json",
         ]
         if request.model:
@@ -65,19 +73,34 @@ class OpenClawCliRuntime:
 
     async def invoke(self, request: AgentRequest) -> AgentResult:
         try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=".fusion-flow-",
+                suffix=".prompt",
+                dir=request.workspace,
+                delete=False,
+            ) as prompt_file:
+                prompt_file.write(request.prompt)
+                message_file = prompt_file.name
+        except OSError as error:
+            return AgentResult(status="error", error=f"could not create OpenClaw prompt file: {error}")
+
+        try:
             process = await asyncio.create_subprocess_exec(
-                *self.command_for(request),
+                *self.command_for(request, message_file=message_file),
                 cwd=str(request.workspace),
                 env=self.env,
-                stdin=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
         except OSError as error:
+            os.unlink(message_file)
             return AgentResult(status="error", error=f"could not start OpenClaw: {error}")
 
         try:
-            communicate = process.communicate(request.prompt.encode("utf-8"))
+            communicate = process.communicate()
             if request.timeout_seconds is None:
                 stdout, stderr = await communicate
             else:
@@ -90,6 +113,11 @@ class OpenClawCliRuntime:
                 session_id=self.session_key(request.session_id),
                 error=f"OpenClaw agent exceeded {request.timeout_seconds}s",
             )
+        finally:
+            try:
+                os.unlink(message_file)
+            except FileNotFoundError:
+                pass
 
         payload = self._parse_stdout(stdout)
         if payload is None:
