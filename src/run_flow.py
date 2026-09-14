@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
     SessionAgent = Any  # type: ignore[assignment,misc]
     Conversation = Any  # type: ignore[assignment,misc]
     ScheduleRegistry = Any  # type: ignore[assignment,misc]
+
     class FileEntry:
         def __init__(self, **kwargs): self.__dict__.update(kwargs)
     class ToolFunction:
@@ -419,6 +420,7 @@ class _StepToolRegistry(ToolRegistry):
         self.files = files or {}
         self.tools = tools or {}
         self.funcs = funcs or {}
+
 
     def get(self, name: str) -> ToolFunction | None:
         return self.funcs.get(name)
@@ -2042,6 +2044,7 @@ async def _registered_launch_violation(
     return ""
 
 
+
 async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[str, object]:
     workspace, cwd, script = await _resolve_program_contract(invocation)
     # Program steps have deterministic subprocess semantics. Asking an interactive
@@ -2097,6 +2100,28 @@ async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[s
         except ValueError:
             pass
     raise ValueError("Hermes Program agent returned no valid captured stdout")
+async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
+    workspace, cwd, script = await _resolve_program_contract(invocation)
+    client = OpenClawGatewayClient()
+    await client.start()
+    chunks = []
+    try:
+        prompt = "Execute the declared Program once. Run this script and return only its captured stdout as strict JSON: " + str(script)
+        async for event in client.prompt(prompt):
+            payload = event.payload
+            text = payload.get("text") if isinstance(payload, dict) else None
+            if isinstance(text, str): chunks.append(text)
+    finally:
+        await client.close()
+    for text in reversed(chunks):
+        for candidate in [text.strip(), *reversed(text.strip().splitlines())]:
+            try:
+                return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip('` ').strip(), terminal=invocation.terminal)
+            except ValueError:
+                pass
+    result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
+    return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=invocation.terminal)
+
 
 async def _complete_program_step(
     invocation: ProgramInvocation,
@@ -2106,8 +2131,31 @@ async def _complete_program_step(
 ) -> dict[str, object]:
     """Run one Program through a narrow Agent and a deterministic process tool."""
 
+
     if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
         return await _complete_program_step_hermes(invocation)
+async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
+    workspace, cwd, script = await _resolve_program_contract(invocation)
+    client = OpenClawGatewayClient()
+    await client.start()
+    chunks = []
+    try:
+        prompt = "Execute the declared Program once. Run this script and return only its captured stdout as strict JSON: " + str(script)
+        async for event in client.prompt(prompt):
+            payload = event.payload
+            text = payload.get("text") if isinstance(payload, dict) else None
+            if isinstance(text, str): chunks.append(text)
+    finally:
+        await client.close()
+    for text in reversed(chunks):
+        for candidate in [text.strip(), *reversed(text.strip().splitlines())]:
+            try:
+                return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip('` ').strip(), terminal=invocation.terminal)
+            except ValueError:
+                pass
+    result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
+    return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=invocation.terminal)
+
 
     workspace, cwd, script = await _resolve_program_contract(invocation)
     invocation = replace(invocation, cwd=cwd)
@@ -2480,14 +2528,17 @@ async def _load_step_tools(
             _STEP_TOOL_SESSIONS_BY_RUN.setdefault(run_id, set()).add(session_id)
         source = _STEP_TOOLS_SOURCES.get(session_id)
         if source is None:
-            source = await ToolRegistry.load(_host_tools_dir(_TOOLS_DIR), session_id=session_id)
+            if hasattr(ToolRegistry, "load"):
+                source = await ToolRegistry.load(_host_tools_dir(_TOOLS_DIR), session_id=session_id)
+            else:
+                source = _StepToolRegistry()
             _STEP_TOOLS_SOURCES[session_id] = source
-        else:
+        elif hasattr(source, "refresh"):
             await source.refresh()
 
         workspace = _workspace_dir()
         excluded_tools = _WORKFLOW_LAUNCHERS | _NESTED_TURN_TOOLS
-        tools = {name: tool for name, tool in source.tools.items() if name not in excluded_tools}
+        tools = {name: tool for name, tool in getattr(source, "tools", {}).items() if name not in excluded_tools}
         funcs = {
             name: _bind_step_tool_to_workspace(name, func, workspace)
             for name in tools
@@ -3299,6 +3350,7 @@ async def run_flow(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
+
     ai_socket = _host_ai_socket(current_tool_ai_socket)
     if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
@@ -3438,6 +3490,7 @@ async def run_flow_resume(
 
     if not _host_available(_WORKSPACE_DIR):
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
+
     ai_socket = _host_ai_socket(current_tool_ai_socket)
     if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
