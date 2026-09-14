@@ -1,9 +1,0 @@
-{
-  "error_type": "ExceptionGroup",
-  "flow_path": "flows/q13/q13.workflow",
-  "run_id": "377c937eca68ebfff4343ed6641e6d2c",
-  "status": "failed",
-  "steps": [],
-  "version": 1,
-  "workflow_id": "q13"
-}
