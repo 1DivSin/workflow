@@ -130,3 +130,18 @@ The host adapter reads the shared provider configuration and passes the resolved
 python -m compileall -q src installer
 npm test
 ~~~
+
+## Interactive workflow installer
+
+安装：
+pm install 或 python -m pip install .。
+
+交互式安装 workflow：
+
+``bash
+python install_workflow.py
+``
+
+安装器会依次检测本机 agent、让你选择已检测到的宿主、请求确认，然后打印
+SUCCESS 或 FAILURE。安装完成后重启对应 agent，让它重新发现
+dynamic-workflow skill；如果宿主目录不可写，会明确失败，不会静默切换。
