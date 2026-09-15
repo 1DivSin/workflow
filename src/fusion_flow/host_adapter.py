@@ -39,6 +39,13 @@ def _credential_env() -> dict[str, str]:
 def host_name() -> str:
     return os.getenv(HOST_ENV, "").strip().lower()
 
+def _workspace_override(default: str | Path) -> Path:
+    name = host_name()
+    raw = os.getenv(WORKSPACE_ENV) or (
+        os.getenv(name.upper() + "_WORKSPACE") if name in {"codex", "openclaw", "hermes"} else None
+    )
+    return Path(raw or default).expanduser().resolve()
+
 def host_config(default: str | Path = ".") -> HostConfig | None:
     root = Path(default).expanduser().resolve()
     name = host_name()
@@ -50,43 +57,34 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
              "hermes": Path(os.getenv("HERMES_HOME", str(home / ".hermes")))}
     base = bases[name]
     exe = os.getenv(name.upper() + "_EXECUTABLE")
-    source_roots = {'codex': Path('/public/home/sychen/cxy/open_source_agents/codex/bin/codex.js'), 'openclaw': Path('/public/home/sychen/cxy/open_source_agents/openclaw/openclaw.mjs'), 'hermes': Path('/public/home/sychen/cxy/open_source_agents/hermes-agent')}
-    source = source_roots.get(name)
+    source_raw = os.getenv(name.upper() + "_SOURCE")
+    source = Path(source_raw).expanduser() if source_raw else None
     exe = exe or shutil.which(name)
     if not exe and source and source.exists():
         exe = str(source)
     if not exe:
         return None
-    workspace = Path(os.getenv(WORKSPACE_ENV, os.getenv(name.upper() + "_WORKSPACE", str(root))))
+    workspace = _workspace_override(root)
     tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
     state = Path(os.getenv(STATE_ENV, str(base / "state")))
     command = ((('node', exe) if name in ('codex', 'openclaw') else ('python3', '-m', 'hermes_cli.main')) if exe else (name,))
     inherited_path = os.getenv("PATH", "")
-    path_parts = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"]
-    node_bin = Path("/public/home/sychen/.local/node-current/bin")
-    if node_bin.is_dir():
-        path_parts.insert(0, str(node_bin))
-    if name == "hermes":
-        hermes_bin = Path("/public/home/sychen/cxy/open_source_agents/hermes-agent/.venv/bin")
-        if hermes_bin.is_dir():
-            path_parts.insert(0, str(hermes_bin))
-    if inherited_path:
-        path_parts.append(inherited_path)
-    stable_path = os.pathsep.join(dict.fromkeys(path_parts))
+    stable_path = inherited_path
     env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), "PATH": stable_path}
     try:
         env.update(provider_environment('default'))
     except (FileNotFoundError, RuntimeError):
         pass
     if name == 'hermes':
-        env['PYTHONPATH'] = str(source_roots['hermes']) + os.pathsep + os.getenv('PYTHONPATH', '')
-        venv = source_roots['hermes'] / '.venv' / 'bin' / 'python'
-        if venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
+        if source and source.is_dir():
+            env['PYTHONPATH'] = str(source) + os.pathsep + os.getenv('PYTHONPATH', '')
+            venv = source / '.venv' / 'bin' / 'python'
+            if venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
     return HostConfig(name, exe, workspace, tools, state, command, env)
 
-def workspace_dir(default):
+def workspace_dir(default: str | Path = ".") -> Path:
     config = host_config(default)
-    return None if config is None else config.workspace
+    return config.workspace if config is not None else _workspace_override(default)
 
 def tools_dir(default):
     config = host_config(default)
