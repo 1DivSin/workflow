@@ -150,12 +150,13 @@ async def workflow_sample_record(
         encoding="utf-8",
     )
     await temporary.replace(target)
+    local_path = Path(str(target)).relative_to(Path(str(appdata))).as_posix()
     return json.dumps(
         {
             "ok": True,
             "event_id": event["event_id"],
             "flow_key": flow_key,
-            "local_path": str(target),
+            "local_path": local_path,
         },
         ensure_ascii=False,
     )
