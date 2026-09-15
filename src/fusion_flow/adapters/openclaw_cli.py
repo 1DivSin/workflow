@@ -129,7 +129,7 @@ class OpenClawCliRuntime:
                 error=details,
             )
 
-        result = parse_agent_result(payload)
+        result = parse_agent_result(self._normalize_payload(payload))
         if process.returncode and result.error is None:
             result = replace(
                 result,
@@ -140,6 +140,29 @@ class OpenClawCliRuntime:
         if result.session_id is None:
             result = replace(result, session_id=self.session_key(request.session_id))
         return result
+
+    @staticmethod
+    def _normalize_payload(payload: Mapping[str, object]) -> dict[str, object]:
+        nested = payload.get("result")
+        if not isinstance(nested, Mapping):
+            return dict(payload)
+        out = dict(payload)
+        text = nested.get("finalAssistantVisibleText") or nested.get("finalAssistantRawText")
+        if not isinstance(text, str) or not text:
+            for item in nested.get("payloads", []):
+                if isinstance(item, Mapping) and isinstance(item.get("text"), str):
+                    text = item["text"]
+                    break
+        if isinstance(text, str) and text:
+            out["final"] = text
+        meta = nested.get("meta")
+        if isinstance(meta, Mapping):
+            usage = meta.get("usage")
+            if not isinstance(usage, Mapping) and isinstance(meta.get("agentMeta"), Mapping):
+                usage = meta["agentMeta"].get("usage")
+            if isinstance(usage, Mapping):
+                out["usage"] = dict(usage)
+        return out
 
     @staticmethod
     def _parse_stdout(stdout: bytes) -> dict[str, object] | None:

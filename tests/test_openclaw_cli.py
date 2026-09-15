@@ -93,6 +93,13 @@ class OpenClawCliRuntimeTests(unittest.TestCase):
         self.assertEqual(result.text, "Reply with PONG")
         self.assertTrue(result.session_id.startswith("agent:main:workflow:"))
 
+    def test_normalizes_nested_openclaw_envelope(self) -> None:
+        _, adapter_module = _load_adapter_module()
+        payload = {"status": "ok", "result": {"finalAssistantVisibleText": "PONG", "meta": {"usage": {"input": 8, "output": 2, "total": 10}}}}
+        result = adapter_module.OpenClawCliRuntime._normalize_payload(payload)
+        self.assertEqual(result["final"], "PONG")
+        self.assertEqual(result["usage"], {"input": 8, "output": 2, "total": 10})
+
     def test_preserves_structured_cli_failure(self) -> None:
         runtime_module, adapter_module = _load_adapter_module()
         with tempfile.TemporaryDirectory() as temp:
