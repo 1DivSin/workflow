@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from importlib import import_module
 from os import PathLike
+from pathlib import Path
 from secrets import choice
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
@@ -31,6 +32,16 @@ from .model import (
     aggregate_tokens,
     assert_safe_name,
 )
+
+
+def _public_source_label(source: anyio.Path) -> str:
+    """Return a source label without exposing the host's absolute path."""
+
+    path = Path(str(source))
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.name or "<unknown>"
 
 if TYPE_CHECKING:
     from .flow import Flow
@@ -1163,14 +1174,14 @@ async def run(
                         anyio.Path(run_path, "program.py"),
                         await source.read_bytes(),
                     )
-                    snapshot_status = str(source)
+                    snapshot_status = _public_source_label(source)
                 else:
-                    snapshot_status = f"unavailable: {source}"
+                    snapshot_status = f"unavailable: {_public_source_label(source)}"
                     logger.warning(
-                        f"Failed to snapshot FusionFlow program: {source} is not a file",
+                        f"Failed to snapshot FusionFlow program: {_public_source_label(source)} is not a file",
                     )
             except Exception as snapshot_error:
-                snapshot_status = f"unavailable: {source}"
+                snapshot_status = f"unavailable: {_public_source_label(source)}"
                 logger.warning(
                     f"Failed to snapshot FusionFlow program: {snapshot_error}",
                 )
@@ -1275,7 +1286,7 @@ async def run(
         raise caught
     return RunResult(
         run_id=selected_id,
-        run_dir=str(run_path),
+        run_dir=selected_id,
         status="error" if status == "error" else "ok",
     )
 
