@@ -40,6 +40,8 @@ Copy the example configuration:
 
 ~~~bash
 mkdir -p ~/.config/genuineknowledge
+export OPENAI_BASE_URL=https://your-provider.example/v1
+# Optional DeepSeek route: set DEEPSEEK_BASE_URL and DEEPSEEK_API_KEY, then use deepseek:model in models
 cp config/providers.example.json ~/.config/genuineknowledge/providers.json
 chmod 600 ~/.config/genuineknowledge/providers.json
 ~~~
