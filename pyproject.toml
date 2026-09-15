@@ -34,3 +34,6 @@ check_untyped_defs = true
 
 [tool.setuptools.data-files]
 "share/dynamic-workflow" = ["src/SKILL.md"]
+
+[project.scripts]
+dynamic-workflow = "installer.cli:main"
