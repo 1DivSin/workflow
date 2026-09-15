@@ -416,14 +416,30 @@ class _AgentStepResultParseError(ValueError):
 
 
 class _StepToolRegistry(ToolRegistry):
+    """Tool registry that works with both psi-agent and standalone runtimes."""
+
     def __init__(self, *, files=None, tools=None, funcs=None):
         self.files = files or {}
-        self.tools = tools or {}
-        self.funcs = funcs or {}
+        self._tools = dict(tools or {})
+        self._funcs = dict(funcs or {})
 
+    @property
+    def tools(self):
+        result = dict(self._tools)
+        for entry in self.files.values():
+            entry_tools = getattr(entry, "tools", None)
+            if isinstance(entry_tools, dict):
+                result.update(entry_tools)
+        return result
 
     def get(self, name: str) -> ToolFunction | None:
-        return self.funcs.get(name)
+        if name in self._funcs:
+            return self._funcs[name]
+        for entry in self.files.values():
+            entry_funcs = getattr(entry, "funcs", None)
+            if isinstance(entry_funcs, dict) and name in entry_funcs:
+                return entry_funcs[name]
+        return None
 
     async def refresh(self) -> dict[str, str]:
         return {}
