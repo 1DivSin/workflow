@@ -2444,6 +2444,31 @@ async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict
     funcs[execute_metadata.name] = execute_program
     funcs[compile_metadata.name] = compile_program
     funcs[submit_metadata.name] = submit_program_result
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "openclaw":
+        client = OpenClawGatewayClient(session_key="agent:main:workflow")
+        await client.start()
+        message = ("Prepare one Human request and return exactly one JSON object with keys "
+                   "question, options, recommended, default. Do not call tools or execute commands.\n" + prompt)
+        try:
+            chunks: list[str] = []
+            async for event in client.prompt(message):
+                text = event.payload.get("text") if isinstance(event.payload, dict) else None
+                if isinstance(text, str):
+                    chunks.append(text)
+        finally:
+            await client.close()
+        raw_response = "".join(chunks).strip()
+        decoder = json.JSONDecoder()
+        for offset, character in enumerate(raw_response):
+            if character != "{":
+                continue
+            try:
+                value, _ = decoder.raw_decode(raw_response[offset:])
+                return _prepared_question_json(_parse_prepared_human_question(json.dumps(value, ensure_ascii=False)))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        raise ValueError("OpenClaw Human preparation returned no valid JSON request")
+
     agent, conversation = await _create_step_agent(
         ai_socket,
         _StepToolRegistry(
