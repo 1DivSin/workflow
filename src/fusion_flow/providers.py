@@ -18,7 +18,8 @@ def load_providers(path: str|Path|None=None) -> dict[str, Provider]:
         if not isinstance(model,str) or not model: continue
         route=model.split(':',1)[0] if ':' in model else 'default'; key=keys.get(route,keys.get('default','OPENAI_API_KEY'))
         if isinstance(key,str) and key.startswith('$'): key=key[1:]
-        out[role]=Provider(route,str(urls.get(route,urls.get('default',''))).rstrip('/'),str(key),model.split(':',1)[1] if ':' in model else model)
+        base_url = os.path.expandvars(str(urls.get(route, urls.get('default', '')))).rstrip('/')
+        out[role]=Provider(route,base_url,str(key),model.split(':',1)[1] if ':' in model else model)
     return out
 def select_provider(role='default', *, path=None) -> Provider:
     providers=load_providers(path)
