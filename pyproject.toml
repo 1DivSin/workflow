@@ -24,10 +24,10 @@ where = ["src"]
 include = ["fusion_flow*", "installer*"]
 [tool.ruff]
 line-length = 100
-target-version = 'py311'
+target-version = 'py312'
 
 [tool.mypy]
-python_version = '3.11'
+python_version = '3.12'
 ignore_missing_imports = true
 check_untyped_defs = true
 
