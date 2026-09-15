@@ -7,7 +7,14 @@ name = "dynamic-workflow"
 version = "0.1.0"
 description = "Host agnostic dynamic workflow runtime"
 requires-python = ">=3.12"
-dependencies = ["websockets>=12", "hermes-agent[acp]"]
+dependencies = [
+    "anyio>=4,<5",
+    "antlr4-python3-runtime>=4.13.2,<4.14",
+    "hermes-agent[acp]",
+    "json-repair>=0.30,<1",
+    "loguru>=0.7,<1",
+    "websockets>=12",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -18,10 +25,10 @@ where = ["src"]
 include = ["fusion_flow*", "installer*"]
 [tool.ruff]
 line-length = 100
-target-version = 'py311'
+target-version = 'py312'
 
 [tool.mypy]
-python_version = '3.11'
+python_version = '3.12'
 ignore_missing_imports = true
 check_untyped_defs = true
 
