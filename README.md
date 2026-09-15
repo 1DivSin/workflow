@@ -10,29 +10,21 @@ Host-agnostic workflow runtime with shared provider routing and host adapters fo
 
 ## Installation
 
-Clone the repository and install the Node dependencies:
+Clone the repository and run the installer from its root directory:
 
-~~~bash
+```bash
 git clone https://github.com/1DivSin/workflow.git
 cd workflow
-npm install
-~~~
+python install_workflow.py
+```
 
-Create a Python environment and install the project. Python 3.12 is required by the current workflow source:
+On Windows, run:
 
-~~~bash
-conda create -n agent-workflow-test312 python=3.12 -y
-conda activate agent-workflow-test312
-python -m pip install -e . --no-deps
-python -m pip install pytest
-~~~
+```powershell
+py -3 .\install_workflow.py
+```
 
-Run the repository checks:
-
-~~~bash
-python -m compileall -q src installer
-npm test
-~~~
+The installer detects available agent hosts, prompts for a host selection and confirmation, installs the `dynamic-workflow` skill into the selected host's skill directory, and prints the installation result. Restart the selected agent after a successful installation.
 
 ## Provider configuration
 
@@ -130,18 +122,3 @@ The host adapter reads the shared provider configuration and passes the resolved
 python -m compileall -q src installer
 npm test
 ~~~
-
-## Interactive workflow installer
-
-安装：
-pm install 或 python -m pip install .。
-
-交互式安装 workflow：
-
-``bash
-python install_workflow.py
-``
-
-安装器会依次检测本机 agent、让你选择已检测到的宿主、请求确认，然后打印
-SUCCESS 或 FAILURE。安装完成后重启对应 agent，让它重新发现
-dynamic-workflow skill；如果宿主目录不可写，会明确失败，不会静默切换。
