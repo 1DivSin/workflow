@@ -1,1 +1,1 @@
-{"baseURLs":{"default":"https://rightapi.ai/v1"},"apiKeys":{"default":"$OPENAI_API_KEY"},"models":{"planning":"gpt-5.6-sol","default":"gpt-5.6-sol","fallback":"gpt-5.6-sol"}}
+{"baseURLs":{"default":"${OPENAI_BASE_URL}"},"apiKeys":{"default":"$OPENAI_API_KEY"},"models":{"planning":"gpt-5.6-sol","default":"gpt-5.6-sol","fallback":"gpt-5.6-sol"}}

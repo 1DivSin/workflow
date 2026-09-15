@@ -11,7 +11,7 @@ dependencies = ["websockets>=12"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["run_flow", "flow_manage", "workflow_sample"]
+py-modules = ["run_flow", "flow_manage", "workflow_sample", "_runtime_paths", "_workflow_authoring_context"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

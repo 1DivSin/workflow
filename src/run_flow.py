@@ -557,8 +557,8 @@ class _AgentSessionAdapter:
                     f"Agent executor {context.executor_id!r} resolved to inconsistent configurations"
                 )
             return existing
-        handle = flow.agent(config) if self._agent_runtime is not None else _host_agent_handle(config, flow.agent)
-        if handle is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
+        handle = _host_agent_handle(config, flow.agent)
+        if handle is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex", "openclaw"}:
             handle = AgentHandle(name=context.executor_id, config=config)
         if handle is None:
             raise ExecutionPlanError(f"No Agent handle is registered for executor {context.executor_id!r}")
@@ -2121,7 +2121,7 @@ async def _complete_program_step(
     """Run one Program through a narrow Agent and a deterministic process tool."""
 
 
-    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex", "openclaw"}:
         return await _complete_program_step_hermes(invocation)
 
 
@@ -2396,6 +2396,31 @@ async def _complete_program_step(
     funcs[execute_metadata.name] = execute_program
     funcs[compile_metadata.name] = compile_program
     funcs[submit_metadata.name] = submit_program_result
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "openclaw":
+        client = OpenClawGatewayClient(session_key="agent:main:workflow")
+        await client.start()
+        message = ("Prepare one Human request and return exactly one JSON object with keys "
+                   "question, options, recommended, default. Do not call tools or execute commands.\n" + prompt)
+        try:
+            chunks: list[str] = []
+            async for event in client.prompt(message):
+                text = event.payload.get("text") if isinstance(event.payload, dict) else None
+                if isinstance(text, str):
+                    chunks.append(text)
+        finally:
+            await client.close()
+        raw_response = "".join(chunks).strip()
+        decoder = json.JSONDecoder()
+        for offset, character in enumerate(raw_response):
+            if character != "{":
+                continue
+            try:
+                value, _ = decoder.raw_decode(raw_response[offset:])
+                return _prepared_question_json(_parse_prepared_human_question(json.dumps(value, ensure_ascii=False)))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        raise ValueError("OpenClaw Human preparation returned no valid JSON request")
+
     agent, conversation = await _create_step_agent(
         ai_socket,
         _StepToolRegistry(
@@ -3351,7 +3376,7 @@ async def run_flow(
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
     agent_runtime = _host_agent_runtime()
     ai_socket = _host_ai_socket(current_tool_ai_socket)
-    if ai_socket is None and agent_runtime is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"codex", "hermes"}:
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex", "openclaw"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3494,7 +3519,7 @@ async def run_flow_resume(
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
     agent_runtime = _host_agent_runtime()
     ai_socket = _host_ai_socket(current_tool_ai_socket)
-    if ai_socket is None and agent_runtime is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"codex", "hermes"}:
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex", "openclaw"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
