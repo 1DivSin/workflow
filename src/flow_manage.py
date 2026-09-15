@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import re
-import os
 from pathlib import Path
 from datetime import UTC, datetime
 
-import _runtime_paths as _paths
 import anyio
+from fusion_flow.host_adapter import workspace_dir as _host_workspace_dir
 
 
 def _flows_dir() -> anyio.Path:
     # Flow task dirs live under the user workspace.
-    return anyio.Path(os.environ.get("PSI_WORKFLOW_WORKSPACE") or str(_paths.resolve_workspace())) / "flows"
+    return anyio.Path(_host_workspace_dir(Path.cwd())) / "flows"
 
 
 def _validate_flow_name(flow_name: str) -> str | None:

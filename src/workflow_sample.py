@@ -49,17 +49,29 @@ from pathlib import Path
 
 import anyio
 from _workflow_authoring_context import current_prompt as _current_authoring_prompt
+from _runtime_paths import resolve_workspace as _resolve_default_workspace
 
+from fusion_flow.host_adapter import state_dir as _host_state_dir
 from fusion_flow.host_adapter import workspace_dir as _host_workspace_dir
 
+
+def _default_workspace() -> Path:
+    return _resolve_default_workspace().expanduser().resolve()
+
+
 async def _resolve_appdata_root() -> str:
-    return str(_host_workspace_dir(Path(__file__).parents[2]) / ".psi" / "appdata")
+    workspace = Path(_workspace_dir())
+    fallback = workspace / ".psi" / "appdata"
+    state = _host_state_dir(fallback)
+    return str(state if state is not None else fallback)
 
 
 def _workspace_dir() -> str:
     """Resolve the current user workspace without importing a sibling tool."""
 
-    return str(_host_workspace_dir(Path(__file__).parents[2]))
+    fallback = _default_workspace()
+    workspace = _host_workspace_dir(fallback)
+    return str(workspace if workspace is not None else fallback)
 
 
 async def _resolve_flow(flow_path: str) -> tuple[anyio.Path, str, str]:
@@ -138,12 +150,13 @@ async def workflow_sample_record(
         encoding="utf-8",
     )
     await temporary.replace(target)
+    local_path = Path(str(target)).relative_to(Path(str(appdata))).as_posix()
     return json.dumps(
         {
             "ok": True,
             "event_id": event["event_id"],
             "flow_key": flow_key,
-            "local_path": str(target),
+            "local_path": local_path,
         },
         ensure_ascii=False,
     )
