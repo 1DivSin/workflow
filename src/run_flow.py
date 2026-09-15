@@ -2130,11 +2130,11 @@ async def _complete_program_step(
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
     """Run one Program through a narrow Agent and a deterministic process tool."""
-
-
-    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex", "openclaw"}:
+    host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
+    if host_name == "openclaw":
+        return await _complete_program_step_openclaw(invocation)
+    if host_name in {"hermes", "codex"}:
         return await _complete_program_step_hermes(invocation)
-async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
     workspace, cwd, script = await _resolve_program_contract(invocation)
     client = OpenClawGatewayClient()
     await client.start()
