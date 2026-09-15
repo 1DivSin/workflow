@@ -4,6 +4,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
+from ..process import create_subprocess_exec
+
 @dataclass
 class ACPEvent:
     method: str
@@ -31,7 +33,7 @@ class HermesACPClient:
             for line in env_file.read_text().splitlines():
                 if line.strip() and not line.lstrip().startswith("#") and "=" in line:
                     k, v = line.split("=", 1); env.setdefault(k.strip(), v.strip().strip("\""))
-        self.proc = await asyncio.create_subprocess_exec(*self.command, cwd=self.cwd, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        self.proc = await create_subprocess_exec(*self.command, cwd=self.cwd, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         await self.request("initialize", {"protocolVersion": 1, "clientInfo": {"name": "fusion-flow", "version": "0.1"}})
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:

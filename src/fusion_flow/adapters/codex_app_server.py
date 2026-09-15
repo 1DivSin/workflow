@@ -3,6 +3,8 @@ import asyncio, json
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
+from ..process import create_subprocess_exec
+
 @dataclass
 class CodexEvent:
     method: str
@@ -16,7 +18,7 @@ class CodexAppServerClient:
         self._next_id = 0
 
     async def start(self) -> None:
-        self.proc = await asyncio.create_subprocess_exec(*self.command, cwd=self.cwd, env=self.env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        self.proc = await create_subprocess_exec(*self.command, cwd=self.cwd, env=self.env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         await self.request("initialize", {"clientInfo": {"name": "fusion-flow", "version": "0.1"}, "capabilities": {}})
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
