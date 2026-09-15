@@ -23,7 +23,7 @@ Create a Python environment and install the project. Python 3.12 is required by 
 ~~~bash
 conda create -n agent-workflow-test312 python=3.12 -y
 conda activate agent-workflow-test312
-python -m pip install -e . --no-deps
+python -m pip install -e .
 python -m pip install pytest
 ~~~
 
