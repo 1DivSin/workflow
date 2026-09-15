@@ -56,7 +56,8 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
              "openclaw": Path(os.getenv("OPENCLAW_HOME", str(home / ".openclaw"))),
              "hermes": Path(os.getenv("HERMES_HOME", str(home / ".hermes")))}
     base = bases[name]
-    exe = os.getenv(name.upper() + "_EXECUTABLE")
+    configured_exe = os.getenv(name.upper() + "_EXECUTABLE", "").strip() or None
+    exe = configured_exe
     source_raw = os.getenv(name.upper() + "_SOURCE")
     source = Path(source_raw).expanduser() if source_raw else None
     exe = exe or shutil.which(name)
@@ -67,7 +68,7 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     workspace = _workspace_override(root)
     tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
     state = Path(os.getenv(STATE_ENV, str(base / "state")))
-    command = ((('node', exe) if name in ('codex', 'openclaw') else ('python3', '-m', 'hermes_cli.main')) if exe else (name,))
+    command = ((('node', exe) if name in ('codex', 'openclaw') else (exe,)) if exe else (name,))
     inherited_path = os.getenv("PATH", "")
     stable_path = inherited_path
     env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), "PATH": stable_path}
@@ -79,7 +80,7 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
         if source and source.is_dir():
             env['PYTHONPATH'] = str(source) + os.pathsep + os.getenv('PYTHONPATH', '')
             venv = source / '.venv' / 'bin' / 'python'
-            if venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
+            if not configured_exe and venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
     return HostConfig(name, exe, workspace, tools, state, command, env)
 
 def workspace_dir(default: str | Path = ".") -> Path:
