@@ -54,7 +54,17 @@ Do **not** activate this skill for `.prose` files — those belong to OpenProse.
 | `fusion_flow.execution` | shared `flow.*` runtime; G4 Agent leaves reuse `run`/`agent`/`session` |
 | `fusion_flow.job_store` | private, strict state-v3 Human wait/checkpoint state |
 | workspace `run_flow` / `run_flow_resume` tools | file/JSON boundary, ephemeral Session-backed Agent/Program dispatch, and Human preparation/resume |
-| workspace `clarify` tool | existing user-facing choice or free-text question formatter |
+| workspace `clarify` / host user-input tool | existing user-facing choice or free-text question formatter |
+
+### Host user-input bridge
+
+The workflow runtime returns a normalized Human request. The parent host owns presentation and response collection:
+
+- psi-agent and Hermes: call the built-in `clarify` tool.
+- OpenClaw: call the built-in `ask_user` tool and map its result to the same response contract.
+- Codex: present the request in the parent conversation and use the next user message as the response.
+
+The workflow does not assume that every host exposes a tool named `clarify`.
 
 The Python runtime has one contract: `execute_workflow` requires `inputs=`;
 Agent and Human callbacks receive `(prompt, CompletionContext)`;
@@ -171,7 +181,7 @@ Call `run_flow` once. If it returns output Artifacts, use them as the result. If
 
 When `run_flow` or `run_flow_resume` returns a sole top-level `$fusion_flow/control` object whose `status == "waiting_for_human"`:
 
-1. Call the existing `clarify` tool with `$fusion_flow/control.request.question`, `.options`, `.recommended`, and `.default`.
+1. Use the host user-input bridge: `clarify` for psi-agent/Hermes, `ask_user` for OpenClaw, or the parent conversation for Codex. Pass `$fusion_flow/control.request.question`, `.options`, `.recommended`, and `.default`.
 2. Show the formatted text verbatim and **END THE TURN**. Do not call another tool and do not treat the question as an output Artifact.
 3. On the next user message, map a numbered choice to its option label. If the user selected the generated `Other` line without supplying text, ask for that text first. For an open-ended request with a non-empty `default`, map an affirmative acceptance such as “可以” or “ok” to that exact default. Preserve other free text or structured content.
 4. For a single-output Human Step, JSON-encode every mapped option label or default as a JSON string. Pass other ordinary non-empty free text directly, except JSON-encode it as a JSON string when its trimmed spelling is valid JSON, starts with `{`, `[`, or `"`, or equals `NaN`, `Infinity`, or `-Infinity`. JSON-encode non-string structured content. Multiple output Artifacts require a JSON object keyed exactly by those Artifact IDs; JSON-encode that object without dropping or adding keys.
