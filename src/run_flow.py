@@ -2045,82 +2045,30 @@ async def _registered_launch_violation(
 
 
 
-async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[str, object]:
+async def _complete_program_step_host(invocation: ProgramInvocation) -> dict[str, object]:
+    """Execute a declared interpreted Program once, preserving captured diagnostics.
+
+    This is shared process execution, not a request to a different agent host.
+    Unknown/compiled languages fail explicitly instead of being run as Python.
+    """
     workspace, cwd, script = await _resolve_program_contract(invocation)
-    # Program steps have deterministic subprocess semantics. Asking an interactive
-    # model to run them can stall and cannot guarantee byte accurate stdout.
-    result = await _execute_program_command(
-        invocation, (sys.executable, str(script), *invocation.argv[1:]),
-        stdin=invocation.stdin or "",
+    invocation = replace(invocation, cwd=cwd)
+    runtimes = {".py": sys.executable, ".sh": "bash", ".js": "node", ".mjs": "node", ".cjs": "node"}
+    runtime = runtimes.get(script.suffix.lower())
+    if runtime is None:
+        return _program_error_outputs(
+            invocation, phase="execution", kind="unsupported_program_runtime",
+            message=f"No interpreted Program runtime is configured for {script.suffix!r}", attempts=[],
+        )
+    argv, error = await _build_interpreted_program_argv(
+        runtime, cwd=cwd, script=script, logical_args=invocation.argv[1:],
     )
+    if error:
+        return _program_error_outputs(
+            invocation, phase="execution", kind="runtime_unavailable", message=error, attempts=[],
+        )
+    result = await _execute_program_command(invocation, argv, stdin=invocation.stdin or "")
     return _program_result_outputs(invocation, [result])
-    contract = {"script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin, "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids), "terminal": invocation.terminal, "instruction": invocation.instruction}
-    client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(workspace))
-    await client.start()
-    session_id = await client.new_session(str(workspace))
-    chunks: list[str] = []
-    try:
-        async for event in client.prompt(session_id, "Execute this exact Program contract using the workspace shell. Run it once and return only captured stdout as JSON. " + json.dumps(contract, ensure_ascii=False, sort_keys=True)):
-            value = event.params
-            if isinstance(value, dict):
-                update = value.get("update", value)
-                content = update.get("content") if isinstance(update, dict) else None
-                if isinstance(content, str): chunks.append(content)
-                elif isinstance(content, dict) and isinstance(content.get("text"), str): chunks.append(content["text"])
-                elif isinstance(content, list): chunks.extend(i.get("text", "") for i in content if isinstance(i, dict) and isinstance(i.get("text"), str))
-    finally:
-        await client.close()
-    candidates: list[str] = []
-    for chunk in reversed(chunks):
-        text = chunk.strip()
-        if not text:
-            continue
-        candidates.append(text)
-        for line in reversed(text.splitlines()):
-            line = line.strip()
-            if line.startswith("```"):
-                line = line.strip("`").strip()
-            if line and line not in candidates:
-                candidates.append(line)
-        for match in re.findall(r"\\b(?:true|false)\\b", text, flags=re.IGNORECASE):
-            value = match.lower()
-            if value not in candidates:
-                candidates.append(value)
-    for candidate in candidates:
-        try:
-            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate, terminal=invocation.terminal)
-        except ValueError:
-            pass
-    if invocation.terminal:
-        # ACP may finish without an agent_message_chunk; preserve the declared
-        # Program contract as a deterministic fallback for terminal checks.
-        result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
-        try:
-            return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=True)
-        except ValueError:
-            pass
-    raise ValueError("Hermes Program agent returned no valid captured stdout")
-async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
-    workspace, cwd, script = await _resolve_program_contract(invocation)
-    client = OpenClawGatewayClient()
-    await client.start()
-    chunks = []
-    try:
-        prompt = "Execute the declared Program once. Run this script and return only its captured stdout as strict JSON: " + str(script)
-        async for event in client.prompt(prompt):
-            payload = event.payload
-            text = payload.get("text") if isinstance(payload, dict) else None
-            if isinstance(text, str): chunks.append(text)
-    finally:
-        await client.close()
-    for text in reversed(chunks):
-        for candidate in [text.strip(), *reversed(text.strip().splitlines())]:
-            try:
-                return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip('` ').strip(), terminal=invocation.terminal)
-            except ValueError:
-                pass
-    result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
-    return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=invocation.terminal)
 
 
 async def _complete_program_step(
@@ -2129,33 +2077,9 @@ async def _complete_program_step(
     ai_socket: str,
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
-    """Run one Program through a narrow Agent and a deterministic process tool."""
-
-
-    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
-        return await _complete_program_step_hermes(invocation)
-async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
-    workspace, cwd, script = await _resolve_program_contract(invocation)
-    client = OpenClawGatewayClient()
-    await client.start()
-    chunks = []
-    try:
-        prompt = "Execute the declared Program once. Run this script and return only its captured stdout as strict JSON: " + str(script)
-        async for event in client.prompt(prompt):
-            payload = event.payload
-            text = payload.get("text") if isinstance(payload, dict) else None
-            if isinstance(text, str): chunks.append(text)
-    finally:
-        await client.close()
-    for text in reversed(chunks):
-        for candidate in [text.strip(), *reversed(text.strip().splitlines())]:
-            try:
-                return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip('` ').strip(), terminal=invocation.terminal)
-            except ValueError:
-                pass
-    result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
-    return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=invocation.terminal)
-
+    """Dispatch Program execution without crossing host-agent boundaries."""
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex", "openclaw"}:
+        return await _complete_program_step_host(invocation)
 
     workspace, cwd, script = await _resolve_program_contract(invocation)
     invocation = replace(invocation, cwd=cwd)
@@ -3352,8 +3276,6 @@ async def run_flow(
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
 
     ai_socket = _host_ai_socket(current_tool_ai_socket)
-    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
-        return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
 
@@ -3361,6 +3283,10 @@ async def run_flow(
     inputs = _parse_mapping(inputs_json, label="inputs_json")
     resource_capacities = _parse_resource_capacities(resource_capacities_json)
     compiled = _compile_workflow_for_run(source, flow_path=flow_path)
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
+        program_only = all(kind == "Program" for kind in compiled.executor_kinds.values())
+        if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() != "openclaw" or not program_only:
+            return json.dumps({"error": "No Agent/Human runtime adapter is registered for the detected host"}, ensure_ascii=False)
     await _record_workflow_sample_if_needed(flow_path, compiled)
     instruction_files = await _materialize_instruction_files(compiled, flow_path)
     initial_checkpoint = create_execution_checkpoint(
