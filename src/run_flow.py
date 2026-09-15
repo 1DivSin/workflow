@@ -571,7 +571,7 @@ class _AgentSessionAdapter:
                 )
             return existing
         handle = _host_agent_handle(config, flow.agent)
-        if handle is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
+        if handle is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex", "openclaw"}:
             handle = AgentHandle(name=context.executor_id, config=config)
         if handle is None:
             raise ExecutionPlanError(f"No Agent handle is registered for executor {context.executor_id!r}")
@@ -2132,7 +2132,7 @@ async def _complete_program_step(
     """Run one Program through a narrow Agent and a deterministic process tool."""
 
 
-    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex"}:
+    if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() in {"hermes", "codex", "openclaw"}:
         return await _complete_program_step_hermes(invocation)
 async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
     workspace, cwd, script = await _resolve_program_contract(invocation)
@@ -3352,7 +3352,7 @@ async def run_flow(
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
 
     ai_socket = _host_ai_socket(current_tool_ai_socket)
-    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex", "openclaw"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3492,7 +3492,7 @@ async def run_flow_resume(
         return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
 
     ai_socket = _host_ai_socket(current_tool_ai_socket)
-    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex"}:
+    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex", "openclaw"}:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
