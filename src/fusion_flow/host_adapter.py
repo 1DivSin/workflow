@@ -2,10 +2,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from contextvars import ContextVar
 import os, shutil, subprocess
 from .providers import provider_environment
+
+if TYPE_CHECKING:
+    from .agent_runtime import AgentRuntime
 
 HOST_ENV = "PSI_WORKFLOW_HOST"
 WORKSPACE_ENV = "PSI_WORKFLOW_WORKSPACE"
@@ -24,6 +27,7 @@ class HostConfig:
 
 _ai_socket_provider: ContextVar[Callable[[], str | None] | None] = ContextVar("ai_socket", default=None)
 _agent_factory: ContextVar[Callable[[object], object] | None] = ContextVar("agent_factory", default=None)
+_agent_runtime_provider: ContextVar[Callable[[], "AgentRuntime | None"] | None] = ContextVar("agent_runtime", default=None)
 
 def _credential_env() -> dict[str, str]:
     path = Path(os.getenv('PSI_WORKFLOW_CREDENTIALS', str(Path.home() / '.config/genuineknowledge/agents.env')))
@@ -116,3 +120,16 @@ def agent_handle(config, default_factory=None):
     factory = _agent_factory.get()
     return None if factory is None else factory(config)
 
+
+def set_agent_runtime_provider(provider: Callable[[], "AgentRuntime | None"] | None) -> None:
+    _agent_runtime_provider.set(provider)
+
+
+def agent_runtime(default: "AgentRuntime | None" = None) -> "AgentRuntime | None":
+    provider = _agent_runtime_provider.get()
+    if provider is not None:
+        return provider()
+    if host_name() == "openclaw":
+        from .adapters.openclaw_cli import OpenClawCliRuntime
+        return OpenClawCliRuntime()
+    return default

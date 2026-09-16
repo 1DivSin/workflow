@@ -26,34 +26,10 @@ from anyio.abc import ByteReceiveStream, Process
 from json_repair import repair_json
 from loguru import logger
 
-try:
-    from psi_agent.session.agent import AgentError, SessionAgent, current_tool_ai_socket
-    from psi_agent.session.ai_client import AiClient
-    from psi_agent.session.conversation import Conversation
-    from psi_agent.session.schedule_registry import ScheduleRegistry
-    from psi_agent.session.tool_registry import FileEntry, ToolFunction, ToolRegistry
-except ImportError:  # pragma: no cover - non-psi hosts inject a runtime adapter
-    AgentError = RuntimeError
-    SessionAgent = Any  # type: ignore[assignment,misc]
-    Conversation = Any  # type: ignore[assignment,misc]
-    ScheduleRegistry = Any  # type: ignore[assignment,misc]
-
-    class FileEntry:
-        def __init__(self, **kwargs): self.__dict__.update(kwargs)
-    class ToolFunction:
-        def __init__(self, name): self.name = name
-        @classmethod
-        def from_callable(cls, func): return cls(func.__name__)
-    ToolRegistry = Any  # type: ignore[assignment,misc]
-
-    def current_tool_ai_socket() -> str | None:
-        return None
-
-    class AiClient:  # type: ignore[no-redef]
-        def __init__(self, _socket: str) -> None:
-            raise RuntimeError(
-                "No host runtime adapter is installed; psi-agent is unavailable"
-            )
+from fusion_flow.adapters.psi_runtime import (
+    AgentError, AiClient, Conversation, FileEntry, ScheduleRegistry,
+    SessionAgent, ToolFunction, ToolRegistry, current_tool_ai_socket,
+)
 
 _TOOLS_DIR = Path(__file__).parent
 _AGENT_DIR = _TOOLS_DIR.parent.parent if _TOOLS_DIR.parent.name == "tools" else _TOOLS_DIR.parent
@@ -110,7 +86,9 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
 from fusion_flow.adapters import HermesACPClient, CodexAppServerClient
+from fusion_flow.agent_runtime import AgentInvocation, AgentRuntime
 from fusion_flow.host_adapter import (
+    agent_runtime as _host_agent_runtime,
     agent_handle as _host_agent_handle,
     host_available as _host_available,
     state_dir as _host_state_dir,
@@ -549,18 +527,29 @@ def _reject_unsupported_agent_routing(config: AgentConfig) -> None:
         raise ExecutionPlanError(f"G4 Agent routing cannot be honored by the current Session AI socket: {requested}")
 
 
+def _agent_step_prompt(prompt: str, context: CompletionContext) -> str:
+    return (
+        "Execute exactly one assigned FusionFlow step. Do not start another workflow.\n"
+        f"Workspace root: {_workspace_dir()}\n"
+        f"Step: {context.step_id}\nRequired output keys: {json.dumps(context.output_ids)}\n"
+        f"{prompt}\nReturn exactly one JSON object keyed by those output keys."
+    )
+
+
 class _AgentSessionAdapter:
     """Bridge G4 Agent leaves through ``flow.agent`` and ``flow.session``."""
 
     def __init__(
         self,
         *,
-        ai_socket: str,
+        ai_socket: str | None,
         get_tool_registry: Callable[[str], Awaitable[ToolRegistry]],
+        agent_runtime: AgentRuntime | None = None,
         run_id: str = "",
     ) -> None:
         self._ai_socket = ai_socket
         self._get_tool_registry = get_tool_registry
+        self._agent_runtime = agent_runtime
         self._run_id = run_id
         self._handles: dict[str, AgentHandle] = {}
 
@@ -611,9 +600,18 @@ class _AgentSessionAdapter:
                 "Workflow launcher tools are unavailable inside Agent Steps"
             )
 
-        handle = self._handle(context)
         invocation_id = context.dispatch.invocation_id or context.step_id
         session_id = _invocation_session_id(self._run_id, invocation_id)
+        if self._agent_runtime is not None:
+            reply = await self._agent_runtime.run_agent(
+                AgentInvocation(_agent_step_prompt(prompt, context), session_id, _workspace_dir(),
+                                None if context.agent_config is None else context.agent_config.model)
+            )
+            if not reply.ok:
+                raise ExecutionPlanError(f"Agent runtime failed for step {context.step_id!r}: {reply.error or reply.status}")
+            return _parse_agent_step_result(reply.text, step_id=context.step_id, output_ids=context.output_ids)
+
+        handle = self._handle(context)
         selected_tools = _select_agent_tools(
             await self._get_tool_registry(session_id),
             handle.config.tools,
@@ -3168,7 +3166,8 @@ async def _execute_persisted_run(
     run: HumanWorkflowRun,
     lease: RunLease,
     *,
-    ai_socket: str,
+    ai_socket: str | None,
+    agent_runtime: AgentRuntime | None = None,
     instruction_files: Mapping[str, str],
 ) -> str:
     if run.prepared_request is not None:
@@ -3211,6 +3210,7 @@ async def _execute_persisted_run(
     agent_sessions = _AgentSessionAdapter(
         ai_socket=ai_socket,
         get_tool_registry=get_step_tools,
+        agent_runtime=agent_runtime,
         run_id=artifact_store.run_dir.name,
     )
 
@@ -3389,11 +3389,11 @@ async def run_flow(
         passed through ``clarify``.
     """
 
-    if not _host_available(_WORKSPACE_DIR):
-        return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-
+    agent_runtime = _host_agent_runtime()
     ai_socket = _host_ai_socket(current_tool_ai_socket)
-    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex", "openclaw"}:
+    if not _host_available(_WORKSPACE_DIR) and ai_socket is None and agent_runtime is None:
+        return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
+    if ai_socket is None and agent_runtime is None:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     if type(max_loop_epochs) is not int or max_loop_epochs < 1:
         raise ValueError("max_loop_epochs must be a positive integer")
@@ -3426,6 +3426,7 @@ async def run_flow(
                 await lease.load(),
                 lease,
                 ai_socket=ai_socket,
+                agent_runtime=agent_runtime,
                 instruction_files=instruction_files,
             )
 
@@ -3459,6 +3460,7 @@ async def run_flow(
     agent_sessions = _AgentSessionAdapter(
         ai_socket=ai_socket,
         get_tool_registry=get_step_tools,
+        agent_runtime=agent_runtime,
         run_id=artifact_store.run_dir.name,
     )
 
@@ -3529,11 +3531,11 @@ async def run_flow_resume(
         reserved ``$fusion_flow/control`` Human-wait envelope.
     """
 
-    if not _host_available(_WORKSPACE_DIR):
-        return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
-
+    agent_runtime = _host_agent_runtime()
     ai_socket = _host_ai_socket(current_tool_ai_socket)
-    if ai_socket is None and os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() not in {"hermes", "codex", "openclaw"}:
+    if not _host_available(_WORKSPACE_DIR) and ai_socket is None and agent_runtime is None:
+        return json.dumps({"error": "No supported host runtime detected"}, ensure_ascii=False)
+    if ai_socket is None and agent_runtime is None:
         return json.dumps({"error": "No runtime adapter is registered for the detected host"}, ensure_ascii=False)
     response = _parse_human_response(human_response_json)
     store = _job_store()
@@ -3611,6 +3613,7 @@ async def run_flow_resume(
                 run,
                 lease,
                 ai_socket=ai_socket,
+                agent_runtime=agent_runtime,
                 instruction_files=instruction_files,
             )
 
@@ -3655,5 +3658,6 @@ async def run_flow_resume(
             resumed,
             lease,
             ai_socket=ai_socket,
+            agent_runtime=agent_runtime,
             instruction_files=instruction_files,
         )
