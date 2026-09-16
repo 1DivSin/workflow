@@ -2,40 +2,65 @@
 
 Host-agnostic workflow runtime with shared provider routing and host adapters for Codex, OpenClaw, and Hermes.
 
-## Requirements
+## Install Workflow (five commands per host)
 
-- Python 3.12 or newer
-- uv
-- Node.js 18 or newer (only for npm packaging or JavaScript checks)
+Prerequisites: Git, uv, and an installed host (Codex, Hermes, or OpenClaw).
+Authenticate the host with its normal setup before running model-backed workflows.
+For OpenClaw, use Node 26.1+ or 24.16+; the native integration is tested against 2026.9.4.
+Replace `/path/to/project` with an existing workspace (quote Windows paths).
+Keep the checkout and its uv environment: the registered server uses that interpreter.
 
-## Installation
+### Codex
 
-For an Agent host, installation is a host concern: bundle this skill and let the host run the Python runtime with `uv run`. End users only describe the workflow in natural language.
-
-For local development, clone the repository and let uv create the isolated environment:
-
-~~~bash
-git clone https://github.com/1DivSin/workflow.git
+```sh
+git clone https://github.com/1DivSin/workflow.git workflow
 cd workflow
-uv sync
-~~~
+uv sync --python 3.12
+uv run dynamic-workflow installer . --host codex --workspace /path/to/project
+uv run dynamic-workflow doctor --host codex --workspace /path/to/project
+```
 
-Run commands through the project environment:
+### Hermes
 
-~~~bash
-uv run python -m installer.cli installer .
-# OpenClaw native plugin
-uv run python -m installer.cli installer . --register-plugin
-~~~
+```sh
+git clone https://github.com/1DivSin/workflow.git workflow
+cd workflow
+uv sync --python 3.12
+uv run dynamic-workflow installer . --host hermes --workspace /path/to/project
+uv run dynamic-workflow doctor --host hermes --workspace /path/to/project
+```
 
-`npm install` is only needed for npm packaging or JavaScript checks; it does not install the Python runtime.
+### OpenClaw
 
-Run the repository checks:
+The install command explicitly accepts the three tools declared in the local plugin manifest.
 
-~~~bash
-python -m compileall -q src installer
-npm test
-~~~
+```sh
+git clone https://github.com/1DivSin/workflow.git workflow
+cd workflow
+uv sync --python 3.12
+uv run dynamic-workflow installer . --host openclaw --workspace /path/to/project --register-plugin --accept-capabilities
+uv run dynamic-workflow doctor --host openclaw --workspace /path/to/project
+```
+
+Start a new host session after installation so the skill/tools are rediscovered.
+Codex uses `mcp_servers.fusion_flow` in `config.toml`; Hermes uses the same server
+name in its `config.yaml`; OpenClaw registers the native plugin's three tools.
+`doctor` reads the written configuration, launches the actual MCP process,
+checks `tools/list`, and calls `flow_manage`. OpenClaw also loads the native plugin
+through `plugins inspect --runtime` and verifies its registered tools.
+Any failed check returns a nonzero exit code.
+
+### What CI proves
+
+The installation workflow runs the installer and doctor in temporary host homes
+on Linux and Windows for all three hosts. It also runs the parser regression tests,
+real Python subprocess plugin tests, and the Human checkpoint/restart test.
+The Human test injects a deterministic question generator; it exercises the real
+workflow parser, scheduler, persisted checkpoint and resume logic. It does not
+claim a live LLM or chat UI test, and CI needs no model API keys.
+
+`uv run python scripts/check_install.py --host codex` (or `hermes` / `openclaw`)
+repeats the installation check locally without changing your normal host config.
 
 ## Provider configuration
 
@@ -139,6 +164,6 @@ The host adapter reads the shared provider configuration and passes the resolved
 ## Development checks
 
 ~~~bash
-python -m compileall -q src installer
+uv run python -m compileall -q src
 npm test
 ~~~

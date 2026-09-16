@@ -22,7 +22,8 @@ def _available(
         return True
     if name == "hermes" and environ.get("HERMES_ACP_COMMAND"):
         return True
-    return bool(which(name) or (home / f".{name}").exists())
+    host_home = Path(environ.get(f"{name.upper()}_HOME", str(home / f".{name}"))).expanduser()
+    return bool(which(name) or host_home.exists())
 
 
 def detect_host(
@@ -32,7 +33,7 @@ def detect_host(
     environ: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
 ):
-    env = environ or os.environ
+    env = os.environ if environ is None else environ
     root_path = Path(root).resolve()
     home_path = (home or Path(env.get("USERPROFILE") or env.get("HOME") or Path.home())).expanduser()
     forced = env.get("PSI_WORKFLOW_HOST", "").strip().lower()
@@ -50,6 +51,7 @@ def detect_host(
             skills_dir = Path(env.get("HERMES_SKILLS_DIR", str(host_home / "skills")))
         return {
             "name": name,
+            "executable": env.get(f"{name.upper()}_EXECUTABLE") or which(name),
             "home": str(host_home),
             "workspace": str(workspace),
             "state_dir": str(Path(env.get("PSI_WORKFLOW_STATE_DIR", str(host_home / "state")))),

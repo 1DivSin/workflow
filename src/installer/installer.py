@@ -121,11 +121,18 @@ def install(
     destination=None,
     *,
     register_plugin: bool = False,
+    accept_capabilities: bool = False,
     runner: Callable[..., object] = subprocess.run,
 ):
     h = host or detect_host()
     s = Path(source).resolve()
-    d = Path(destination or Path(h["tools_dir"]) / "genuineknowledge-method")
+    d = Path(destination or Path(h["tools_dir"]) / "genuineknowledge-method").resolve()
+    if d == s or d in s.parents or s in d.parents:
+        raise ValueError("Runtime destination must be separate from the source tree")
+    if not (s / "src" / "SKILL.md").is_file():
+        raise FileNotFoundError(f"Workflow source has no src/SKILL.md: {s}")
+    if register_plugin and h.get("name") != "openclaw":
+        raise ValueError("--register-plugin is only supported for OpenClaw")
 
     d.parent.mkdir(parents=True, exist_ok=True)
     if d.exists():
@@ -139,6 +146,7 @@ def install(
             "*.pyc",
             ".git",
             "*.egg-info",
+            ".venv", "node_modules", ".uv-cache", ".uv-python", "dist", "build",
         ),
     )
 
@@ -147,6 +155,10 @@ def install(
     if skill_source.is_file():
         skill_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_source, skill_dir / "SKILL.md")
+        for resource in ("grammar", "examples"):
+            source_resource = d / "src" / resource if resource == "grammar" else d / resource
+            if source_resource.is_dir():
+                shutil.copytree(source_resource, skill_dir / resource, dirs_exist_ok=True)
 
     if h["name"] == "codex":
         home = Path(h.get("home", Path(h["state_dir"]).parent))
@@ -179,6 +191,11 @@ def install(
 
     plugin_dir = d / "plugins" / "openclaw-workflow"
     registered = False
+    if h.get("name") == "openclaw" and plugin_dir.is_dir():
+        (plugin_dir / "runtime.json").write_text(json.dumps({
+            "runtimeRoot": str(d), "python": sys.executable,
+            "workspace": str(Path(h.get("workspace", ".")).resolve()),
+        }), encoding="utf-8")
 
     if register_plugin:
         if h.get("name") != "openclaw":
@@ -205,7 +222,13 @@ def install(
             str(plugin_dir),
             "--force",
         )
+        if accept_capabilities:
+            command = (*command, "--accept-capabilities")
         runner(command, check=True)
+        enable = (str(executable), "plugins", "enable", "genuineknowledge-workflow")
+        if accept_capabilities:
+            enable += ("--accept-capabilities",)
+        runner(enable, check=True)
         registered = True
 
     state_dir = Path(h["state_dir"])

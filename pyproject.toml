@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Host agnostic dynamic workflow runtime"
 requires-python = ">=3.12"
 dependencies = [
+    "PyYAML>=6,<7",
     "anyio>=4,<5",
     "antlr4-python3-runtime>=4.13.2,<4.14",
     "hermes-agent[acp]",
@@ -37,3 +38,6 @@ check_untyped_defs = true
 
 [project.scripts]
 dynamic-workflow = "installer.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
