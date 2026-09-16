@@ -7,8 +7,13 @@ import subprocess
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+from contextvars import ContextVar
+import os, shutil, subprocess
 from .providers import provider_environment
+
+if TYPE_CHECKING:
+    from .agent_runtime import AgentRuntime
 
 HOST_ENV = "PSI_WORKFLOW_HOST"
 WORKSPACE_ENV = "PSI_WORKFLOW_WORKSPACE"
@@ -27,6 +32,7 @@ class HostConfig:
 
 _ai_socket_provider: ContextVar[Callable[[], str | None] | None] = ContextVar("ai_socket", default=None)
 _agent_factory: ContextVar[Callable[[object], object] | None] = ContextVar("agent_factory", default=None)
+_agent_runtime_provider: ContextVar[Callable[[], "AgentRuntime | None"] | None] = ContextVar("agent_runtime", default=None)
 
 def _credential_env() -> dict[str, str]:
     path = Path(os.getenv("PSI_WORKFLOW_CREDENTIALS", str(Path.home() / ".config/genuineknowledge/agents.env")))
@@ -52,6 +58,12 @@ def _host_command(name: str, executable: str | None) -> tuple[str, ...]:
         if command: return command
     if executable is None: return ()
     return (executable, "app-server", "--stdio") if name == "codex" else (executable,)
+def _workspace_override(default: str | Path) -> Path:
+    name = host_name()
+    raw = os.getenv(WORKSPACE_ENV) or (
+        os.getenv(name.upper() + "_WORKSPACE") if name in {"codex", "openclaw", "hermes"} else None
+    )
+    return Path(raw or default).expanduser().resolve()
 
 def host_config(default: str | Path = ".") -> HostConfig | None:
     root = Path(default).expanduser().resolve()
@@ -73,10 +85,36 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     except (FileNotFoundError, RuntimeError): pass
     if os.getenv("HERMES_PYTHONPATH"): env["PYTHONPATH"] = os.getenv("HERMES_PYTHONPATH", "")
     return HostConfig(name, executable, workspace, tools, state, command, env)
+    configured_exe = os.getenv(name.upper() + "_EXECUTABLE", "").strip() or None
+    exe = configured_exe
+    source_raw = os.getenv(name.upper() + "_SOURCE")
+    source = Path(source_raw).expanduser() if source_raw else None
+    exe = exe or shutil.which(name)
+    if not exe and source and source.exists():
+        exe = str(source)
+    if not exe:
+        return None
+    workspace = _workspace_override(root)
+    tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
+    state = Path(os.getenv(STATE_ENV, str(base / "state")))
+    command = ((('node', exe) if name in ('codex', 'openclaw') else (exe,)) if exe else (name,))
+    inherited_path = os.getenv("PATH", "")
+    stable_path = inherited_path
+    env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), "PATH": stable_path}
+    try:
+        env.update(provider_environment('default'))
+    except (FileNotFoundError, RuntimeError):
+        pass
+    if name == 'hermes':
+        if source and source.is_dir():
+            env['PYTHONPATH'] = str(source) + os.pathsep + os.getenv('PYTHONPATH', '')
+            venv = source / '.venv' / 'bin' / 'python'
+            if not configured_exe and venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
+    return HostConfig(name, exe, workspace, tools, state, command, env)
 
-def workspace_dir(default):
+def workspace_dir(default: str | Path = ".") -> Path:
     config = host_config(default)
-    return None if config is None else config.workspace
+    return config.workspace if config is not None else _workspace_override(default)
 
 def tools_dir(default):
     config = host_config(default)
@@ -102,3 +140,17 @@ def set_agent_factory(factory): _agent_factory.set(factory)
 def agent_handle(config, default_factory=None):
     factory = _agent_factory.get()
     return None if factory is None else factory(config)
+
+
+def set_agent_runtime_provider(provider: Callable[[], "AgentRuntime | None"] | None) -> None:
+    _agent_runtime_provider.set(provider)
+
+
+def agent_runtime(default: "AgentRuntime | None" = None) -> "AgentRuntime | None":
+    provider = _agent_runtime_provider.get()
+    if provider is not None:
+        return provider()
+    if host_name() == "openclaw":
+        from .adapters.openclaw_cli import OpenClawCliRuntime
+        return OpenClawCliRuntime()
+    return default

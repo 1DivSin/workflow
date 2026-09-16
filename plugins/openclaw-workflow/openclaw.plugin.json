@@ -1,0 +1,16 @@
+{
+  "id": "genuineknowledge-workflow",
+  "name": "Dynamic Workflow",
+  "description": "Run and manage FusionFlow workflows from OpenClaw.",
+  "contracts": {
+    "tools": ["run_flow", "run_flow_resume", "flow_manage"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

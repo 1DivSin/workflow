@@ -46,6 +46,30 @@ from .runtime import current_run_context, stable_payload_hash
 
 _PROCESS_JOBS: dict[int, object] = {}
 
+_PROCESS_ENV_KEYS = (
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+)
+
+
+def _process_environment(
+    env: Mapping[str, str] | None,
+    internal_env: Mapping[str, str],
+) -> dict[str, str] | None:
+    """Build a minimal child environment while preserving executable lookup."""
+
+    if env is None and not internal_env:
+        return None
+    merged = {key: environ[key] for key in _PROCESS_ENV_KEYS if key in environ}
+    merged.update(_normalize_string_mapping(env))
+    merged.update(internal_env)
+    return merged
+
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
@@ -1772,13 +1796,7 @@ class Flow:
             internal_env[percent_variable] = "%"
             percent_reference = f"%{percent_variable}%"
             process_command = " ".join(f'"{argument.replace("%", percent_reference)}"' for argument in command)
-        merged_env = None
-        if env is not None or internal_env:
-            merged_env = {
-                **environ,
-                **_normalize_string_mapping(env),
-                **internal_env,
-            }
+        merged_env = _process_environment(env, internal_env)
         reserved, call_base, call_count = await run._reserve_call_binding(
             normalized_name,
             binding_name,

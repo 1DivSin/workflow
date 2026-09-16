@@ -37,7 +37,7 @@ workflow react {
   step_executor(env_step) == env;
   step_executor(update) == update_executor;
   step_executor(terminal) == terminal_validator;
-  program_path(terminal_validator) == "./skills/workflow/examples/terminal_identity.py";
+  program_path(terminal_validator) == "./examples/terminal_identity.py";
 
   step_name(reason) == "Reason";
   step_instruction(reason) == "Read prompt and produce thought and action as two separate outputs. Do not execute action.";

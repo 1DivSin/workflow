@@ -4,28 +4,31 @@ Host-agnostic workflow runtime with shared provider routing and host adapters fo
 
 ## Requirements
 
-- Node.js 18 or newer
 - Python 3.12 or newer
-- uv or Miniconda
+- uv
+- Node.js 18 or newer (only for npm packaging or JavaScript checks)
 
 ## Installation
 
-Clone the repository and install the Node dependencies:
+For an Agent host, installation is a host concern: bundle this skill and let the host run the Python runtime with `uv run`. End users only describe the workflow in natural language.
+
+For local development, clone the repository and let uv create the isolated environment:
 
 ~~~bash
 git clone https://github.com/1DivSin/workflow.git
 cd workflow
-npm install
+uv sync
 ~~~
 
-Create a Python environment and install the project. Python 3.12 is required by the current workflow source:
+Run commands through the project environment:
 
 ~~~bash
-conda create -n agent-workflow-test312 python=3.12 -y
-conda activate agent-workflow-test312
-python -m pip install -e . --no-deps
-python -m pip install pytest
+uv run python -m installer.cli installer .
+# OpenClaw native plugin
+uv run python -m installer.cli installer . --register-plugin
 ~~~
+
+`npm install` is only needed for npm packaging or JavaScript checks; it does not install the Python runtime.
 
 Run the repository checks:
 
