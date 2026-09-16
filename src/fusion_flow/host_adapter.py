@@ -49,7 +49,12 @@ def host_name() -> str:
     return os.getenv(HOST_ENV, "").strip().lower()
 
 def _split_command(value: str) -> tuple[str, ...]:
-    return tuple(shlex.split(value, posix=os.name != "nt"))
+    if os.name == "nt":
+        lexer = shlex.shlex(value, posix=True)
+        lexer.whitespace_split = True
+        lexer.escape = ""
+        return tuple(lexer)
+    return tuple(shlex.split(value))
 
 def _host_command(name: str, executable: str | None) -> tuple[str, ...]:
     override = os.getenv({"codex": "CODEX_APP_SERVER_COMMAND", "hermes": "HERMES_ACP_COMMAND", "openclaw": "OPENCLAW_COMMAND"}[name], "").strip()
@@ -74,43 +79,37 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     base = bases[name]
     override = os.getenv({"codex": "CODEX_EXECUTABLE", "openclaw": "OPENCLAW_EXECUTABLE", "hermes": "HERMES_EXECUTABLE"}[name], "").strip()
     command_override = os.getenv({"codex": "CODEX_APP_SERVER_COMMAND", "hermes": "HERMES_ACP_COMMAND", "openclaw": "OPENCLAW_COMMAND"}[name], "").strip()
-    executable = override or (_split_command(command_override) or (None,))[0] or shutil.which(name)
-    command = _host_command(name, executable)
-    if not executable or not command: return None
-    workspace = Path(os.getenv(WORKSPACE_ENV, os.getenv(f"{name.upper()}_WORKSPACE", str(root))))
-    tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
-    state = Path(os.getenv(STATE_ENV, str(base / "state")))
-    env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state)}
-    try: env.update(provider_environment("default"))
-    except (FileNotFoundError, RuntimeError): pass
-    if os.getenv("HERMES_PYTHONPATH"): env["PYTHONPATH"] = os.getenv("HERMES_PYTHONPATH", "")
-    return HostConfig(name, executable, workspace, tools, state, command, env)
-    configured_exe = os.getenv(name.upper() + "_EXECUTABLE", "").strip() or None
-    exe = configured_exe
-    source_raw = os.getenv(name.upper() + "_SOURCE")
+    source_raw = os.getenv(f"{name.upper()}_SOURCE")
     source = Path(source_raw).expanduser() if source_raw else None
-    exe = exe or shutil.which(name)
-    if not exe and source and source.exists():
-        exe = str(source)
-    if not exe:
+
+    executable = override or (_split_command(command_override) or (None,))[0] or shutil.which(name)
+    if not executable and source and source.exists():
+        executable = str(source)
+    command = _host_command(name, executable)
+    if not executable or not command:
         return None
+
     workspace = _workspace_override(root)
     tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
     state = Path(os.getenv(STATE_ENV, str(base / "state")))
-    command = ((('node', exe) if name in ('codex', 'openclaw') else (exe,)) if exe else (name,))
-    inherited_path = os.getenv("PATH", "")
-    stable_path = inherited_path
-    env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state), "PATH": stable_path}
+    env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state)}
     try:
-        env.update(provider_environment('default'))
+        env.update(provider_environment("default"))
     except (FileNotFoundError, RuntimeError):
         pass
-    if name == 'hermes':
+
+    # Hermes：从源码目录启动
+    if name == "hermes":
         if source and source.is_dir():
-            env['PYTHONPATH'] = str(source) + os.pathsep + os.getenv('PYTHONPATH', '')
-            venv = source / '.venv' / 'bin' / 'python'
-            if not configured_exe and venv.exists(): command = (str(venv), '-m', 'hermes_cli.main')
-    return HostConfig(name, exe, workspace, tools, state, command, env)
+            env["PYTHONPATH"] = str(source) + os.pathsep + os.getenv("PYTHONPATH", "")
+            venv = source / ".venv" / "bin" / "python"
+            if not override and not command_override and venv.exists():
+                command = (str(venv), "-m", "hermes_cli.main")
+        elif os.getenv("HERMES_PYTHONPATH"):
+            # 保留 PR #46 原本的 HERMES_PYTHONPATH 支持，并加上宿主判断
+            env["PYTHONPATH"] = os.getenv("HERMES_PYTHONPATH", "")
+
+    return HostConfig(name, executable, workspace, tools, state, command, env)
 
 def workspace_dir(default: str | Path = ".") -> Path:
     config = host_config(default)
