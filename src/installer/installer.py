@@ -6,6 +6,7 @@ import re
 import sys
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -27,19 +28,25 @@ def configure_codex_mcp(
     """Register the workflow MCP server in Codex config idempotently."""
     path = Path(config).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-
-    try:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    config_data = tomllib.loads(text)
+    lines = text.splitlines()
+    if _CODEX_BEGIN in lines or _CODEX_END in lines:
+        if lines.count(_CODEX_BEGIN) != 1 or lines.count(_CODEX_END) != 1:
+            raise ValueError("Incomplete or duplicate dynamic-workflow config markers")
         start = lines.index(_CODEX_BEGIN)
         end = lines.index(_CODEX_END, start)
-        del lines[start : end + 1]
-    except ValueError:
-        pass
+    else:
+        servers = config_data.get("mcp_servers", {})
+        if not isinstance(servers, dict):
+            raise ValueError("mcp_servers must be a TOML table")
+        if "fusion_flow" in servers:
+            return path  # An existing user-owned server is authoritative.
+        if lines and lines[-1].strip():
+            lines.append("")
+        start, end = len(lines), len(lines) - 1
 
-    if lines and lines[-1].strip():
-        lines.append("")
-
-    lines.extend(
+    lines[start : end + 1] = (
         [
             _CODEX_BEGIN,
             "[mcp_servers.fusion_flow]",
@@ -53,7 +60,9 @@ def configure_codex_mcp(
         ]
     )
 
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    result = "\n".join(lines).rstrip() + "\n"
+    tomllib.loads(result)
+    path.write_text(result, encoding="utf-8")
     return path
 
 
