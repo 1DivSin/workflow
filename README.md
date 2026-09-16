@@ -24,6 +24,8 @@ Run commands through the project environment:
 
 ~~~bash
 uv run python -m installer.cli installer .
+# OpenClaw native plugin
+uv run python -m installer.cli installer . --register-plugin
 ~~~
 
 `npm install` is only needed for npm packaging or JavaScript checks; it does not install the Python runtime.

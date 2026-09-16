@@ -1,4 +1,5 @@
 import json
+import subprocess
 import os
 import sys
 import tempfile
@@ -44,6 +45,30 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue((root / "skills" / "workflow" / "SKILL.md").is_file())
             state = json.loads((root / "state" / "genuineknowledge-method.json").read_text())
             self.assertEqual(Path(state["skill_dir"]), root / "skills" / "workflow")
+
+    def test_openclaw_registration_is_explicit_and_records_plugin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source = root / "source"
+            (source / "src").mkdir(parents=True)
+            (source / "src" / "SKILL.md").write_text("skill", encoding="utf-8")
+            (source / "plugins" / "openclaw-workflow").mkdir(parents=True)
+            (source / "plugins" / "openclaw-workflow" / "openclaw.plugin.json").write_text("{}", encoding="utf-8")
+            host = {
+                "name": "openclaw",
+                "tools_dir": str(root / "tools"),
+                "skills_dir": str(root / "skills"),
+                "state_dir": str(root / "state"),
+                "executable": "openclaw",
+            }
+            calls = []
+            def runner(command, **_kwargs):
+                calls.append(command)
+            target = install(source, host=host, register_plugin=True, runner=runner)
+            self.assertTrue((target / "plugins" / "openclaw-workflow" / "openclaw.plugin.json").is_file())
+            self.assertEqual(calls[0][0:3], ("openclaw", "plugins", "install"))
+            state = json.loads((root / "state" / "genuineknowledge-method.json").read_text())
+            self.assertEqual(Path(state["plugin_dir"]), target / "plugins" / "openclaw-workflow")
 
 
 if __name__ == "__main__":
