@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import json
 import re
 import sys
 import shutil
+import subprocess
 from pathlib import Path
+from typing import Callable, Sequence
+
 from .detect import detect_host
 
 
@@ -50,7 +55,14 @@ def configure_hermes_mcp(config: str | Path, runtime: str | Path, workspace: str
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return path
 
-def install(source, host=None, destination=None):
+def install(
+    source,
+    host=None,
+    destination=None,
+    *,
+    register_plugin: bool = False,
+    runner: Callable[..., object] = subprocess.run,
+):
     h = host or detect_host()
     s = Path(source).resolve()
     d = Path(destination or Path(h["tools_dir"]) / "genuineknowledge-method")
@@ -58,13 +70,51 @@ def install(source, host=None, destination=None):
     if d.exists():
         shutil.rmtree(d)
     shutil.copytree(s, d, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git", "*.egg-info"))
+
+    skill_dir = Path(h["skills_dir"]) / "workflow"
     skill_source = d / "src" / "SKILL.md"
-    if skill_source.exists():
-        skill_dir = Path(h["skills_dir"]) / "workflow"
+    if skill_source.is_file():
         skill_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_source, skill_dir / "SKILL.md")
     if h["name"] == "hermes":
         configure_hermes_mcp(Path(h["home"]) / "config.yaml", d, h["workspace"])
-    Path(h["state_dir"]).mkdir(parents=True, exist_ok=True)
-    (Path(h["state_dir"]) / "genuineknowledge-method.json").write_text(json.dumps({"target": str(d), "skill_dir": str(Path(h["skills_dir"]) / "workflow"), "host": h["name"]}, indent=2))
+        Path(h["state_dir"]).mkdir(parents=True, exist_ok=True)
+        (Path(h["state_dir"]) / "genuineknowledge-method.json").write_text(json.dumps({"target": str(d), "skill_dir": str(Path(h["skills_dir"]) / "workflow"), "host": h["name"]}, indent=2))
+        return d  
+
+    plugin_dir = d / "plugins" / "openclaw-workflow"
+    registered = False
+    if register_plugin:
+        if h.get("name") != "openclaw":
+            raise ValueError("--register-plugin is only supported for OpenClaw")
+        if not (plugin_dir / "openclaw.plugin.json").is_file():
+            raise FileNotFoundError(f"OpenClaw plugin manifest is missing: {plugin_dir}")
+        executable = h.get("executable") or shutil.which("openclaw")
+        if not executable:
+            raise FileNotFoundError("OpenClaw executable is required to register the plugin")
+        command: Sequence[str] = (
+            str(executable),
+            "plugins",
+            "install",
+            "--link",
+            str(plugin_dir),
+            "--force",
+        )
+        runner(command, check=True)
+        registered = True
+
+    state_dir = Path(h["state_dir"])
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state = {
+        "target": str(d),
+        "skill_dir": str(skill_dir),
+        "host": h["name"],
+    }
+    if plugin_dir.is_dir():
+        state["plugin_dir"] = str(plugin_dir)
+        state["plugin_registered"] = registered
+    (state_dir / "genuineknowledge-method.json").write_text(
+        json.dumps(state, indent=2),
+        encoding="utf-8",
+    )
     return d
