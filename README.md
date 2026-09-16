@@ -127,6 +127,13 @@ python -m installer.cli installer .
 python -m installer.cli uninstaller
 ~~~
 
+The same three workflow tools can be registered through any MCP-compatible
+host by launching the stdio server:
+
+~~~bash
+python -m fusion_flow.mcp_server
+~~~
+
 The host adapter reads the shared provider configuration and passes the resolved endpoint, model, and credential environment to the selected host. Secrets must never be committed.
 
 ## Development checks
