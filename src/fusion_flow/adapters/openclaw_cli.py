@@ -31,10 +31,12 @@ class OpenClawCliRuntime:
         return Path(state).expanduser() / "openclaw.json" if state else Path.home() / ".openclaw" / "openclaw.json"
 
     def _safe_human_exec(self, invocation: AgentInvocation, directory: Path) -> tuple[tuple[str, ...], dict[str, str]]:
-        """Build an isolated OpenClaw exec turn with an empty tool allowlist."""
+        """Build an isolated OpenClaw exec turn restricted to workspace reads."""
         env = dict(self.env) if self.env is not None else dict(os.environ)
         ambient = self._ambient_config()
-        config: dict[str, object] = {"tools": {"profile": "minimal", "allow": []}}
+        # agent exec confines filesystem tools to --cwd. The explicit allowlist
+        # then narrows the model-visible tool surface to the read tool only.
+        config: dict[str, object] = {"tools": {"profile": "coding", "allow": ["read"]}}
         if ambient.is_file():
             config["$include"] = str(ambient.resolve())
             roots = [part for part in env.get("OPENCLAW_INCLUDE_ROOTS", "").split(os.pathsep) if part]
