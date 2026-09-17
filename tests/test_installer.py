@@ -86,23 +86,26 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(host["executable"], "openclaw")
 
     def test_source_mode_uses_uv_project_commands(self):
+        fake_uv = "/usr/bin/uv"
         with tempfile.TemporaryDirectory() as raw, patch(
             "installer.installer.shutil.which",
-            side_effect=lambda name: "/usr/bin/uv" if name == "uv" else None,
+            side_effect=lambda name: fake_uv if name == "uv" else None,
         ):
             source = Path(raw) / "workflow"
             mcp, tool, mode = _resolve_runtime_commands(source)
         self.assertEqual(mode, "source")
+        expected_uv = str(Path(fake_uv).resolve())
         self.assertEqual(
             mcp,
             (
-                "/usr/bin/uv",
+                expected_uv,
                 "run",
                 "--project",
                 str(source.resolve()),
                 "dynamic-workflow-mcp",
             ),
         )
+        self.assertEqual(tool[0], expected_uv)
         self.assertEqual(tool[-1], "dynamic-workflow-tool")
 
     def test_installed_mode_resolves_console_entrypoints(self):
