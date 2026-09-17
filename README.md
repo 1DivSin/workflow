@@ -145,11 +145,12 @@ export CODEX_EVENT_LOG="/tmp/codex-events.jsonl"
 
 The log records event methods, parameter keys, and Agent message deltas without recording command output. A run stores artifacts and timing data under its workflow run directory. Do not commit run directories or files containing private repository contents.
 
-Install and remove the host integration with:
+Use the host-specific `uv run dynamic-workflow installer ...` commands in the Install Workflow section above. To remove an installed integration, run the matching host command from the same checkout and uv environment:
 
 ~~~bash
-python -m installer.cli installer .
-python -m installer.cli uninstaller
+uv run dynamic-workflow uninstaller --host codex --workspace /path/to/project
+uv run dynamic-workflow uninstaller --host hermes --workspace /path/to/project
+uv run dynamic-workflow uninstaller --host openclaw --workspace /path/to/project
 ~~~
 
 The same three workflow tools can be registered through any MCP-compatible
