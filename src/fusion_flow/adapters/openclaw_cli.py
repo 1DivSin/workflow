@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 from ..agent_runtime import AgentInvocation, AgentReply
+from ..process import create_subprocess_exec
 
 
 _HUMAN_SESSION_PREFIX = "human-"
@@ -77,7 +78,7 @@ class OpenClawCliRuntime:
             if invocation.model: args += ("--model", invocation.model)
             child_env = self.env
         try:
-            process = await asyncio.create_subprocess_exec(*args, cwd=str(invocation.workspace), env=child_env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            process = await create_subprocess_exec(*args, cwd=str(invocation.workspace), env=child_env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             stdout, stderr = await process.communicate(invocation.prompt.encode())
         except OSError as error:
             return AgentReply(status="error", error=f"could not start OpenClaw: {error}")
