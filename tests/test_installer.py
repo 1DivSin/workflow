@@ -26,17 +26,40 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(host["available"])
         self.assertEqual(host["executable"], "codex")
 
-    def test_detects_openclaw_from_openclaw_command(self):
+    def test_detects_direct_openclaw_command_as_management_executable(self):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
             env = {
-                "OPENCLAW_COMMAND": r"C:\\Tools\\openclaw.cmd agent",
+                "OPENCLAW_COMMAND": "openclaw agent",
                 "PSI_WORKFLOW_HOST": "openclaw",
             }
             host = detect_host(home=home, environ=env, which=lambda _name: None)
         self.assertEqual(host["name"], "openclaw")
         self.assertTrue(host["available"])
-        self.assertTrue(str(host["executable"]).endswith("openclaw.cmd"))
+        self.assertEqual(host["executable"], "openclaw")
+
+    def test_wrapped_openclaw_command_is_not_reused_for_plugin_management(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            env = {
+                "OPENCLAW_COMMAND": "uv run openclaw agent",
+                "PSI_WORKFLOW_HOST": "openclaw",
+            }
+            host = detect_host(home=home, environ=env, which=lambda _name: None)
+        self.assertEqual(host["name"], "openclaw")
+        self.assertTrue(host["available"])
+        self.assertIsNone(host["executable"])
+
+    def test_explicit_openclaw_executable_wins_over_wrapped_command(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            env = {
+                "OPENCLAW_COMMAND": "uv run openclaw agent",
+                "OPENCLAW_EXECUTABLE": "/opt/openclaw/bin/openclaw",
+                "PSI_WORKFLOW_HOST": "openclaw",
+            }
+            host = detect_host(home=home, environ=env, which=lambda _name: None)
+        self.assertEqual(host["executable"], "/opt/openclaw/bin/openclaw")
 
     def test_explicit_target_selects_openclaw_when_codex_is_also_available(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -44,6 +67,7 @@ class InstallerTests(unittest.TestCase):
 
             def which(name):
                 return {"codex": "codex", "openclaw": "openclaw"}.get(name)
+
             host = detect_host(target="openclaw", home=home, environ={}, which=which)
         self.assertEqual(host["name"], "openclaw")
         self.assertEqual(host["executable"], "openclaw")
@@ -87,6 +111,7 @@ class InstallerTests(unittest.TestCase):
 
             def runner(command, **_kwargs):
                 calls.append(command)
+
             target = install(source, host=host, register_plugin=True, runner=runner)
             self.assertTrue(
                 (target / "plugins" / "openclaw-workflow" / "openclaw.plugin.json").is_file()
