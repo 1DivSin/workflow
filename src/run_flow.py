@@ -3009,7 +3009,22 @@ async def _prepare_human_step(
     *,
     ai_socket: str,
     tool_registry: ToolRegistry,
+    agent_runtime: AgentRuntime | None = None,
 ) -> str:
+    if agent_runtime is not None:
+        message = (
+            "Prepare one Human question; do not ask the user or execute the task yourself. "
+            "Return exactly one JSON object with question, options, recommended, default. "
+            "options contains at most four strings; recommended is a 1-based index or 0; "
+            "default applies only to free-text questions.\n" + prompt
+        )
+        reply = await agent_runtime.run_agent(AgentInvocation(
+            message, f"human-{context.step_id}-{new_opaque_id()}", _workspace_dir(),
+        ))
+        if not reply.ok:
+            raise ExecutionPlanError(f"Human preparation failed: {reply.error or reply.status}")
+        return _prepared_question_json(_parse_prepared_human_question(reply.text))
+
     if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex":
         client = CodexAppServerClient(
             command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
@@ -3235,6 +3250,7 @@ async def _execute_persisted_run(
                 context,
                 ai_socket=ai_socket,
                 tool_registry=await get_human_tools(),
+                agent_runtime=agent_runtime,
             )
         except BaseException:
             if owns_human_gate:
