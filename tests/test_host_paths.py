@@ -14,7 +14,7 @@ class HostPathTests(unittest.TestCase):
             {"PSI_WORKFLOW_HOST": "", "PSI_WORKFLOW_WORKSPACE": workspace},
             clear=False,
         ):
-            self.assertEqual(Path(str(_flows_dir())), Path(workspace) / "flows")
+            self.assertEqual(Path(str(_flows_dir())).resolve(), (Path(workspace) / "flows").resolve())
 
     def test_host_source_is_only_used_when_configured(self):
         from fusion_flow.host_adapter import host_config
@@ -31,7 +31,7 @@ class HostPathTests(unittest.TestCase):
         ):
             with patch("fusion_flow.host_adapter.shutil.which", return_value=None):
                 config = host_config(workspace)
-            self.assertEqual(config.workspace, Path(workspace))
+            self.assertEqual(config.workspace, Path(workspace).resolve())
             self.assertEqual(config.executable, "codex.js")
 
     def test_workspace_override_expands_user_path(self):
