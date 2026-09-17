@@ -12,9 +12,14 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "toolCommand": {
+        "type": "array",
+        "minItems": 1,
+        "items": {"type": "string"}
+      },
+      "workspace": {"type": "string"},
       "runtimeRoot": {"type": "string"},
-      "python": {"type": "string"},
-      "workspace": {"type": "string"}
+      "python": {"type": "string"}
     }
   }
 }
