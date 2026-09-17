@@ -16,6 +16,7 @@ class HermesInstallTests(unittest.TestCase):
             'mcp_servers:\n    other: {command: other}\n# display comment\ndisplay:\n    fusion_flow: user-data\n',
             'mcp_servers: {} # empty mapping\ndisplay: {mode: compact}\n',
             'mcp_servers: # no servers yet\ndisplay: {mode: compact}\n',
+            'mcp_servers: &servers\n  other:\n    command: other\ndisplay:\n  mode: compact\n',
         ]
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / 'config.yaml'
@@ -32,6 +33,20 @@ class HermesInstallTests(unittest.TestCase):
                         self.assertEqual(servers[key], value)
                     configure_hermes_mcp(config, Path(raw)/'runtime', raw)
                     self.assertEqual(config.read_text(encoding='utf-8'), result)
+
+    def test_alias_mcp_servers_is_rejected_without_mutation(self):
+        original = (
+            'shared: &servers\n'
+            '  other:\n'
+            '    command: other\n'
+            'mcp_servers: *servers\n'
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / 'config.yaml'
+            config.write_text(original, encoding='utf-8')
+            with self.assertRaises(ValueError):
+                configure_hermes_mcp(config, Path(raw) / 'runtime', raw)
+            self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_invalid_config_is_unchanged(self):
         with tempfile.TemporaryDirectory() as raw:
