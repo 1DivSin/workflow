@@ -1,9 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import plugin from './index.js';
+import plugin, { decodeBridgeResult } from './index.js';
+
+test('bridge envelope does not confuse an error artifact with transport failure', () => {
+  const result = decodeBridgeResult(
+    '__FUSION_FLOW_BRIDGE__' + JSON.stringify({ok: true, result: JSON.stringify({error: 'analysis artifact'})})
+  );
+  assert.equal(result.content[0].text, '{"error":"analysis artifact"}');
+  assert.deepEqual(result.details, {error: 'analysis artifact'});
+  assert.throws(
+    () => decodeBridgeResult('__FUSION_FLOW_BRIDGE__' + JSON.stringify({ok: false, error: 'runtime failed'})),
+    /runtime failed/,
+  );
+});
 
 test('registered tool runs Python with the active workspace and returns a tool result', async () => {
   const workspace = mkdtempSync(path.join(tmpdir(), 'workflow-plugin-'));
