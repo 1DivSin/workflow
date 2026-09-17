@@ -34,9 +34,15 @@ class OpenClawCliRuntime:
         """Build an isolated OpenClaw exec turn restricted to workspace reads."""
         env = dict(self.env) if self.env is not None else dict(os.environ)
         ambient = self._ambient_config()
-        # agent exec confines filesystem tools to --cwd. The explicit allowlist
-        # then narrows the model-visible tool surface to the read tool only.
-        config: dict[str, object] = {"tools": {"profile": "coding", "allow": ["read"]}}
+        # Explicitly expose only `read` and force filesystem tools to remain
+        # inside the workspace selected by --cwd.
+        config: dict[str, object] = {
+            "tools": {
+                "profile": "coding",
+                "allow": ["read"],
+                "fs": {"workspaceOnly": True},
+            }
+        }
         if ambient.is_file():
             config["$include"] = str(ambient.resolve())
             roots = [part for part in env.get("OPENCLAW_INCLUDE_ROOTS", "").split(os.pathsep) if part]
