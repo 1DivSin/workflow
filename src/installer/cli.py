@@ -9,6 +9,34 @@ from .installer import install
 from .uninstaller import uninstall
 
 
+def _installation_summary(host: dict, target: Path, *, register_plugin: bool) -> list[str]:
+    """Describe the concrete host integration changes made by a successful install."""
+    target = Path(target)
+    skill_dir = Path(host["skills_dir"]) / "workflow"
+    host_name = host.get("name", "generic")
+
+    if host_name == "codex":
+        home = Path(host.get("home", Path(host["state_dir"]).parent))
+        config = Path(os.getenv("CODEX_CONFIG", str(home / "config.toml")))
+        integration = f"Codex MCP configured: {config}"
+    elif host_name == "hermes":
+        integration = f"Hermes MCP configured: {Path(host['home']) / 'config.yaml'}"
+    elif host_name == "openclaw":
+        plugin_dir = target / "plugins" / "openclaw-workflow"
+        action = "registered and enabled" if register_plugin else "runtime configured"
+        integration = f"OpenClaw plugin {action}: {plugin_dir}"
+    else:
+        integration = f"Host integration configured: {host_name}"
+
+    state_file = Path(host["state_dir"]) / "genuineknowledge-method.json"
+    return [
+        f"[1/4] Runtime assets installed: {target}",
+        f"[2/4] Workflow skill installed: {skill_dir}",
+        f"[3/4] {integration}",
+        f"[4/4] Installation state written: {state_file}",
+    ]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="dynamic-workflow")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -56,17 +84,24 @@ def main(argv=None):
         install_host = host
         if selected_host and (host["name"] != selected_host or not host["available"]):
             install_host = None
-        print(
-            "installed integration to",
-            install(
-                args.source,
-                host=install_host,
-                destination=args.destination,
-                target_host=selected_host,
-                register_plugin=args.register_plugin,
-                accept_capabilities=args.accept_capabilities,
-            ),
+        target = install(
+            args.source,
+            host=install_host,
+            destination=args.destination,
+            target_host=selected_host,
+            register_plugin=args.register_plugin,
+            accept_capabilities=args.accept_capabilities,
         )
+        for line in _installation_summary(host, target, register_plugin=args.register_plugin):
+            print(line)
+        print("Installation complete.")
+
+        command = "uv run dynamic-workflow" if args.source is not None else "dynamic-workflow"
+        workspace = json.dumps(str(args.workspace.resolve()))
+        host_name = selected_host or host["name"]
+        host_arg = f" --host {host_name}" if host_name in HOSTS else ""
+        print("Run:")
+        print(f"  {command} doctor{host_arg} --workspace {workspace}")
         return
 
     if selected_host and (host["name"] != selected_host or not host["available"]):
