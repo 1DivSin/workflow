@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
 import shutil
 import subprocess
 import tomllib
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -18,6 +20,68 @@ _CODEX_END = "# END dynamic-workflow"
 
 _HERMES_BEGIN = "  # BEGIN dynamic-workflow"
 _HERMES_END = "  # END dynamic-workflow"
+
+
+def _toml_key(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_value(value: object) -> str:
+    """Serialize one tomllib value for the narrow inline-table rewrite below."""
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        if math.isinf(value):
+            return "inf" if value > 0 else "-inf"
+        return repr(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        entries = ", ".join(
+            f"{_toml_key(str(key))} = {_toml_value(item)}"
+            for key, item in value.items()
+        )
+        return "{ " + entries + " }"
+    raise TypeError(f"Unsupported TOML value in mcp_servers: {type(value).__name__}")
+
+
+def _expand_inline_codex_mcp_table(
+    lines: list[str], servers: dict[str, object]
+) -> list[str]:
+    """Turn root ``mcp_servers = {...}`` into an extendable TOML table.
+
+    TOML inline tables are sealed, so appending ``[mcp_servers.fusion_flow]``
+    after one is invalid even when ``fusion_flow`` is not present.  Rewriting
+    only this root assignment to a normal table preserves the parsed user-owned
+    entries while allowing the managed server block to be appended and updated.
+    """
+    candidates = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^\s*mcp_servers\s*=\s*\{", line)
+    ]
+    if not candidates:
+        return lines
+    if len(candidates) != 1:
+        raise ValueError("Ambiguous inline mcp_servers assignment")
+    index = candidates[0]
+    replacement = ["[mcp_servers]"]
+    replacement.extend(
+        f"{_toml_key(str(name))} = {_toml_value(server)}"
+        for name, server in servers.items()
+    )
+    lines[index : index + 1] = replacement
+    return lines
 
 
 def configure_codex_mcp(
@@ -42,6 +106,7 @@ def configure_codex_mcp(
             raise ValueError("mcp_servers must be a TOML table")
         if "fusion_flow" in servers:
             return path  # An existing user-owned server is authoritative.
+        lines = _expand_inline_codex_mcp_table(lines, servers)
         if lines and lines[-1].strip():
             lines.append("")
         start, end = len(lines), len(lines) - 1
