@@ -16,9 +16,52 @@ from .detect import detect_host
 
 _CODEX_BEGIN = "# BEGIN dynamic-workflow"
 _CODEX_END = "# END dynamic-workflow"
+_CODEX_INLINE_MANAGED = "# dynamic-workflow managed fusion_flow"
 
 _HERMES_BEGIN = "  # BEGIN dynamic-workflow"
 _HERMES_END = "  # END dynamic-workflow"
+
+
+def _toml_key(value: str) -> str:
+    return value if re.fullmatch(r"[A-Za-z0-9_-]+", value) else json.dumps(value)
+
+
+def _toml_inline_value(value: object) -> str:
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_inline_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(
+            f"{_toml_key(str(key))} = {_toml_inline_value(item)}"
+            for key, item in value.items()
+        ) + " }"
+    raise ValueError(f"Unsupported TOML value in inline mcp_servers: {type(value).__name__}")
+
+
+def _codex_server_spec(runtime: str | Path, workspace: str | Path) -> dict[str, object]:
+    return {
+        "command": sys.executable,
+        "args": ["-m", "fusion_flow.mcp_server"],
+        "env": {
+            "PYTHONPATH": str(Path(runtime).resolve() / "src"),
+            "PSI_WORKFLOW_HOST": "codex",
+            "PSI_WORKFLOW_WORKSPACE": str(Path(workspace).resolve()),
+        },
+    }
+
+
+def _inline_mcp_servers_line(lines: list[str]) -> int | None:
+    for index, line in enumerate(lines):
+        if re.match(r"^\s*mcp_servers\s*=\s*\{", line):
+            return index
+    return None
 
 
 def configure_codex_mcp(
@@ -41,33 +84,45 @@ def configure_codex_mcp(
         servers = config_data.get("mcp_servers", {})
         if not isinstance(servers, dict):
             raise ValueError("mcp_servers must be a TOML table")
-        if "fusion_flow" in servers:
-            return path  # An existing user-owned server is authoritative.
+
+        inline_index = _inline_mcp_servers_line(lines)
+        inline_is_managed = (
+            inline_index is not None and _CODEX_INLINE_MANAGED in lines[inline_index]
+        )
+        if "fusion_flow" in servers and not inline_is_managed:
+            return path
+
+        if inline_index is not None:
+            updated_servers = dict(servers)
+            updated_servers["fusion_flow"] = _codex_server_spec(runtime, workspace)
+            lines[inline_index] = (
+                f"mcp_servers = {_toml_inline_value(updated_servers)}  {_CODEX_INLINE_MANAGED}"
+            )
+            result = "\n".join(lines).rstrip() + "\n"
+            tomllib.loads(result)
+            path.write_text(result, encoding="utf-8")
+            return path
+
         if lines and lines[-1].strip():
             lines.append("")
         start, end = len(lines), len(lines) - 1
 
-    lines[start : end + 1] = (
-        [
-            _CODEX_BEGIN,
-            "[mcp_servers.fusion_flow]",
-            f"command = {json.dumps(sys.executable)}",
-            'args = ["-m", "fusion_flow.mcp_server"]',
-            "[mcp_servers.fusion_flow.env]",
-            f"PYTHONPATH = {json.dumps(str(Path(runtime).resolve() / 'src'))}",
-            'PSI_WORKFLOW_HOST = "codex"',
-            f"PSI_WORKFLOW_WORKSPACE = {json.dumps(str(Path(workspace).resolve()))}",
-            _CODEX_END,
-        ]
-    )
+    lines[start : end + 1] = [
+        _CODEX_BEGIN,
+        "[mcp_servers.fusion_flow]",
+        f"command = {json.dumps(sys.executable)}",
+        'args = ["-m", "fusion_flow.mcp_server"]',
+        "[mcp_servers.fusion_flow.env]",
+        f"PYTHONPATH = {json.dumps(str(Path(runtime).resolve() / 'src'))}",
+        'PSI_WORKFLOW_HOST = "codex"',
+        f"PSI_WORKFLOW_WORKSPACE = {json.dumps(str(Path(workspace).resolve()))}",
+        _CODEX_END,
+    ]
 
     result = "\n".join(lines).rstrip() + "\n"
     tomllib.loads(result)
     path.write_text(result, encoding="utf-8")
     return path
-
-
-
 
 
 def configure_hermes_mcp(
@@ -97,7 +152,7 @@ def configure_hermes_mcp(
     if servers is not None and not isinstance(servers, dict):
         raise ValueError("mcp_servers must be a YAML mapping")
     if isinstance(servers, dict) and "fusion_flow" in servers:
-        return path  # Preserve an existing user-owned server, including its comments.
+        return path
 
     document = yaml.compose(remaining)
     entries = [] if document is None else [
@@ -114,29 +169,40 @@ def configure_hermes_mcp(
         if servers:
             if value.flow_style:
                 raise ValueError("Use block-style YAML for mcp_servers before adding a server")
-            insertion, indent = value.start_mark.line, value.start_mark.column
+            if value.start_mark.line < key.start_mark.line:
+                raise ValueError("Define mcp_servers as an in-place mapping instead of a YAML alias")
+            first_child = value.value[0][0]
+            insertion = first_child.start_mark.line
+            indent = first_child.start_mark.column
         else:
-            # Turn an empty mapping or null into a block mapping, keeping comments.
             remaining = remaining[:value.start_mark.index] + remaining[value.end_mark.index:]
             lines = remaining.splitlines()
             insertion = key.start_mark.line + 1
 
     block = [
-            _HERMES_BEGIN,
-            "  fusion_flow:",
-            f"    command: {json.dumps(sys.executable)}",
-            '    args: ["-m", "fusion_flow.mcp_server"]',
-            "    env:",
-            f"      PYTHONPATH: {json.dumps(str(Path(runtime).resolve() / 'src'))}",
-            '      PSI_WORKFLOW_HOST: "hermes"',
-            f"      PSI_WORKFLOW_WORKSPACE: {json.dumps(str(Path(workspace).resolve()))}",
-            _HERMES_END,
-        ]
+        _HERMES_BEGIN,
+        "  fusion_flow:",
+        f"    command: {json.dumps(sys.executable)}",
+        '    args: ["-m", "fusion_flow.mcp_server"]',
+        "    env:",
+        f"      PYTHONPATH: {json.dumps(str(Path(runtime).resolve() / 'src'))}",
+        '      PSI_WORKFLOW_HOST: "hermes"',
+        f"      PSI_WORKFLOW_WORKSPACE: {json.dumps(str(Path(workspace).resolve()))}",
+        _HERMES_END,
+    ]
     lines[insertion:insertion] = [" " * indent + line[2:] for line in block]
     result = "\n".join(lines).rstrip() + "\n"
     yaml.safe_load(result)
     path.write_text(result, encoding="utf-8")
     return path
+
+
+def _openclaw_cli_command(executable: str | Path, *arguments: str) -> tuple[str, ...]:
+    command = (str(executable), *arguments)
+    if sys.platform == "win32" and str(executable).lower().endswith((".cmd", ".bat")):
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        return (comspec, "/d", "/s", "/c", subprocess.list2cmdline(command))
+    return command
 
 
 def install(
@@ -157,6 +223,21 @@ def install(
         raise FileNotFoundError(f"Workflow source has no src/SKILL.md: {s}")
     if register_plugin and h.get("name") != "openclaw":
         raise ValueError("--register-plugin is only supported for OpenClaw")
+
+    plugin_executable: str | Path | None = None
+    if register_plugin:
+        plugin_source = s / "plugins" / "openclaw-workflow"
+        if not (plugin_source / "openclaw.plugin.json").is_file():
+            raise FileNotFoundError(f"OpenClaw plugin manifest is missing: {plugin_source}")
+        plugin_executable = (
+            h.get("executable")
+            or os.getenv("OPENCLAW_EXECUTABLE")
+            or shutil.which("openclaw")
+        )
+        if not plugin_executable:
+            raise FileNotFoundError(
+                "OpenClaw executable is required to register the plugin; set OPENCLAW_EXECUTABLE when OPENCLAW_COMMAND uses a wrapper"
+            )
 
     d.parent.mkdir(parents=True, exist_ok=True)
     if d.exists():
@@ -199,9 +280,7 @@ def install(
             h["workspace"],
         )
         Path(h["state_dir"]).mkdir(parents=True, exist_ok=True)
-        (
-            Path(h["state_dir"]) / "genuineknowledge-method.json"
-        ).write_text(
+        (Path(h["state_dir"]) / "genuineknowledge-method.json").write_text(
             json.dumps(
                 {
                     "target": str(d),
@@ -216,43 +295,26 @@ def install(
     plugin_dir = d / "plugins" / "openclaw-workflow"
     registered = False
     if h.get("name") == "openclaw" and plugin_dir.is_dir():
-        (plugin_dir / "runtime.json").write_text(json.dumps({
-            "runtimeRoot": str(d), "python": sys.executable,
-            "workspace": str(Path(h.get("workspace", ".")).resolve()),
-        }), encoding="utf-8")
+        (plugin_dir / "runtime.json").write_text(
+            json.dumps({
+                "runtimeRoot": str(d),
+                "python": sys.executable,
+                "workspace": str(Path(h.get("workspace", ".")).resolve()),
+            }),
+            encoding="utf-8",
+        )
 
     if register_plugin:
-        if h.get("name") != "openclaw":
-            raise ValueError(
-                "--register-plugin is only supported for OpenClaw"
-            )
-
-        if not (plugin_dir / "openclaw.plugin.json").is_file():
-            raise FileNotFoundError(
-                f"OpenClaw plugin manifest is missing: {plugin_dir}"
-            )
-
-        executable = h.get("executable") or shutil.which("openclaw")
-        if not executable:
-            raise FileNotFoundError(
-                "OpenClaw executable is required to register the plugin"
-            )
-
-        command: Sequence[str] = (
-            str(executable),
-            "plugins",
-            "install",
-            "--link",
-            str(plugin_dir),
-            "--force",
-        )
+        assert plugin_executable is not None
+        install_args = ["plugins", "install", "--link", str(plugin_dir), "--force"]
         if accept_capabilities:
-            command = (*command, "--accept-capabilities")
-        runner(command, check=True)
-        enable = (str(executable), "plugins", "enable", "genuineknowledge-workflow")
+            install_args.append("--accept-capabilities")
+        runner(_openclaw_cli_command(plugin_executable, *install_args), check=True)
+
+        enable_args = ["plugins", "enable", "genuineknowledge-workflow"]
         if accept_capabilities:
-            enable += ("--accept-capabilities",)
-        runner(enable, check=True)
+            enable_args.append("--accept-capabilities")
+        runner(_openclaw_cli_command(plugin_executable, *enable_args), check=True)
         registered = True
 
     state_dir = Path(h["state_dir"])
