@@ -4,8 +4,33 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync } from "node:fs";
 
 const pluginRoot = path.dirname(fileURLToPath(import.meta.url));
+const bridgeScript = path.join(pluginRoot, "bridge.py");
+const bridgePrefix = "__FUSION_FLOW_BRIDGE__";
 const string = { type: "string" };
 const parameters = (properties, required = []) => ({type: "object", properties, required, additionalProperties: false});
+
+export function decodeBridgeResult(stdout) {
+  const line = stdout.split(/\r?\n/).reverse().find((candidate) => candidate.startsWith(bridgePrefix));
+  if (!line) throw new Error("Workflow bridge returned no result envelope");
+  let envelope;
+  try {
+    envelope = JSON.parse(line.slice(bridgePrefix.length));
+  } catch (error) {
+    throw new Error(`Workflow bridge returned invalid result envelope: ${error}`);
+  }
+  if (!envelope || typeof envelope !== "object" || typeof envelope.ok !== "boolean") {
+    throw new Error("Workflow bridge returned a malformed result envelope");
+  }
+  if (!envelope.ok) throw new Error(String(envelope.error || "Workflow bridge failed"));
+
+  const raw = envelope.result;
+  const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+  let details = raw;
+  if (typeof raw === "string") {
+    try { details = JSON.parse(raw); } catch { /* Plain-text tool results stay strings. */ }
+  }
+  return { content: [{ type: "text", text }], details };
+}
 
 function runWorkflow(name, params, workspace, config, signal) {
   const settingsPath = path.join(pluginRoot, "runtime.json");
@@ -14,17 +39,8 @@ function runWorkflow(name, params, workspace, config, signal) {
   const python = config.python || process.env.DYNAMIC_WORKFLOW_PYTHON || installed.python || (process.platform === "win32" ? "python" : "python3");
   workspace ||= config.workspace || installed.workspace;
   if (!workspace) throw new Error("OpenClaw did not supply a workflow workspace");
-  const code = [
-    "import asyncio, json, sys",
-    "from flow_manage import flow_manage",
-    "from run_flow import run_flow, run_flow_resume",
-    "name = sys.argv[1]",
-    "params = json.load(sys.stdin)",
-    "fn = {'run_flow': run_flow, 'run_flow_resume': run_flow_resume, 'flow_manage': flow_manage}[name]",
-    "print(asyncio.run(fn(**params)))",
-  ].join("; ");
   return new Promise((resolve, reject) => {
-    const child = spawn(python, ["-c", code, name], {
+    const child = spawn(python, [bridgeScript, name], {
       cwd: workspace,
       env: { ...process.env, PYTHONIOENCODING: "utf-8", PSI_WORKFLOW_HOST: "openclaw", PSI_WORKFLOW_WORKSPACE: workspace,
         PYTHONPATH: [path.join(runtimeRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) },
@@ -44,11 +60,13 @@ function runWorkflow(name, params, workspace, config, signal) {
     child.stdin.end(JSON.stringify(params));
     child.on("error", reject);
     child.on("close", (code) => {
-      if (code !== 0) return reject(new Error(stderr || `workflow exited with ${code}`));
-      let details = stdout.trim();
-      try { details = JSON.parse(details); } catch { /* flow_manage returns plain text. */ }
-      if (details && typeof details === "object" && details.error) return reject(new Error(String(details.error)));
-      resolve({ content: [{ type: "text", text: stdout.trim() }], details });
+      try {
+        const result = decodeBridgeResult(stdout);
+        if (code !== 0) return reject(new Error(stderr || `workflow exited with ${code}`));
+        resolve(result);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   });
 }
