@@ -45,7 +45,7 @@ class CodexMcpInstallTests(unittest.TestCase):
             result = config.read_text(encoding="utf-8")
             parsed = tomllib.loads(result)
             self.assertEqual(parsed["mcp_servers"]["other"]["command"], "other")
-            self.assertEqual(parsed["mcp_servers"]["fusion_flow"]["env"]["PYTHONPATH"], str(Path(raw) / "new" / "src"))
+            self.assertEqual(parsed["mcp_servers"]["fusion_flow"]["env"]["PYTHONPATH"], str((Path(raw) / "new" / "src").resolve()))
             self.assertIn("# another integration", result)
 
     def test_configure_codex_mcp_is_idempotent_and_preserves_existing_config(self):
