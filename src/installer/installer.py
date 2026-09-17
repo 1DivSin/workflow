@@ -102,7 +102,12 @@ def configure_hermes_mcp(
         if servers:
             if value.flow_style:
                 raise ValueError("Use block-style YAML for mcp_servers before adding a server")
-            insertion, indent = value.start_mark.line, value.start_mark.column
+            # MappingNode.start_mark can point at an anchor on the parent line,
+            # e.g. ``mcp_servers: &servers``.  Insert at the first real child
+            # instead so the generated server remains inside the mapping.
+            first_child_key = value.value[0][0]
+            insertion = first_child_key.start_mark.line
+            indent = first_child_key.start_mark.column
         else:
             # Turn an empty mapping or null into a block mapping, keeping comments.
             remaining = remaining[:value.start_mark.index] + remaining[value.end_mark.index:]
