@@ -24,6 +24,7 @@ class InstallerTests(unittest.TestCase):
             host = detect_host(home=home, environ=env, which=lambda _name: None)
         self.assertEqual(host["name"], "codex")
         self.assertTrue(host["available"])
+        self.assertEqual(host["command"], ("codex", "app-server", "--stdio"))
         self.assertEqual(host["executable"], "codex")
 
     def test_detects_direct_openclaw_command_as_management_executable(self):
@@ -36,9 +37,10 @@ class InstallerTests(unittest.TestCase):
             host = detect_host(home=home, environ=env, which=lambda _name: None)
         self.assertEqual(host["name"], "openclaw")
         self.assertTrue(host["available"])
+        self.assertEqual(host["command"], ("openclaw", "agent"))
         self.assertEqual(host["executable"], "openclaw")
 
-    def test_wrapped_openclaw_command_is_not_reused_for_plugin_management(self):
+    def test_wrapped_openclaw_command_is_preserved_but_not_reused_for_plugin_management(self):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
             env = {
@@ -48,6 +50,7 @@ class InstallerTests(unittest.TestCase):
             host = detect_host(home=home, environ=env, which=lambda _name: None)
         self.assertEqual(host["name"], "openclaw")
         self.assertTrue(host["available"])
+        self.assertEqual(host["command"], ("uv", "run", "openclaw", "agent"))
         self.assertIsNone(host["executable"])
 
     def test_explicit_openclaw_executable_wins_over_wrapped_command(self):
@@ -59,6 +62,7 @@ class InstallerTests(unittest.TestCase):
                 "PSI_WORKFLOW_HOST": "openclaw",
             }
             host = detect_host(home=home, environ=env, which=lambda _name: None)
+        self.assertEqual(host["command"], ("uv", "run", "openclaw", "agent"))
         self.assertEqual(host["executable"], "/opt/openclaw/bin/openclaw")
 
     def test_explicit_target_selects_openclaw_when_codex_is_also_available(self):
@@ -70,6 +74,7 @@ class InstallerTests(unittest.TestCase):
 
             host = detect_host(target="openclaw", home=home, environ={}, which=which)
         self.assertEqual(host["name"], "openclaw")
+        self.assertEqual(host["command"], ())
         self.assertEqual(host["executable"], "openclaw")
 
     def test_install_copies_skill_and_records_paths(self):
