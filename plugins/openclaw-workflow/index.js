@@ -47,7 +47,9 @@ function runWorkflow(name, params, workspace, config, signal) {
       if (code !== 0) return reject(new Error(stderr || `workflow exited with ${code}`));
       let details = stdout.trim();
       try { details = JSON.parse(details); } catch { /* flow_manage returns plain text. */ }
-      if (details && typeof details === "object" && details.error) return reject(new Error(String(details.error)));
+      // A workflow is allowed to declare an Artifact named "error".  Process
+      // failure is represented by the Python subprocess exit status; never infer
+      // failure from user-owned result keys.
       resolve({ content: [{ type: "text", text: stdout.trim() }], details });
     });
   });
