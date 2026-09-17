@@ -142,3 +142,8 @@ The host adapter reads the shared provider configuration and passes the resolved
 python -m compileall -q src installer
 npm test
 ~~~
+
+
+## Interactive workflow installer
+
+Run python install_workflow.py to select a detected host and copy the skill after confirmation.
