@@ -11,6 +11,10 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "runtimeRoot": {"type": "string"},
+      "python": {"type": "string"},
+      "workspace": {"type": "string"}
+    }
   }
 }
