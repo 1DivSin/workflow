@@ -30,9 +30,10 @@ class OpenClawPluginRuntimeConfigTests(unittest.TestCase):
                 "workspace": str(workspace),
             }
 
+            fake_uv = "/opt/bin/uv"
             with patch(
                 "installer.installer.shutil.which",
-                side_effect=lambda name: "/opt/bin/uv" if name == "uv" else None,
+                side_effect=lambda name: fake_uv if name == "uv" else None,
             ):
                 target = install(source, host=host)
             runtime = json.loads(
@@ -42,13 +43,14 @@ class OpenClawPluginRuntimeConfigTests(unittest.TestCase):
             )
 
             source_path = str(source.resolve())
+            expected_uv = str(Path(fake_uv).resolve())
             self.assertEqual(
                 runtime["mcpCommand"],
-                ["/opt/bin/uv", "run", "--project", source_path, "dynamic-workflow-mcp"],
+                [expected_uv, "run", "--project", source_path, "dynamic-workflow-mcp"],
             )
             self.assertEqual(
                 runtime["toolCommand"],
-                ["/opt/bin/uv", "run", "--project", source_path, "dynamic-workflow-tool"],
+                [expected_uv, "run", "--project", source_path, "dynamic-workflow-tool"],
             )
             self.assertNotIn("python", runtime)
             self.assertNotIn("runtimeRoot", runtime)
