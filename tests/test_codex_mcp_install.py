@@ -25,6 +25,38 @@ class CodexMcpInstallTests(unittest.TestCase):
                     self.assertEqual(tomllib.loads(result), tomllib.loads(original))
                     self.assertEqual(result, original)
 
+    def test_inline_mcp_servers_without_fusion_flow_are_expanded_and_managed(self):
+        originals = [
+            'mcp_servers = {}\nmodel = "custom"\n',
+            'mcp_servers = { other = { command = "other", args = ["a,b"] } } # keep me\nmodel = "custom"\n',
+        ]
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / "config.toml"
+            for original in originals:
+                with self.subTest(original=original):
+                    config.write_text(original, encoding="utf-8")
+                    configure_codex_mcp(config, Path(raw) / "old", Path(raw) / "workspace")
+                    first = config.read_text(encoding="utf-8")
+                    parsed = tomllib.loads(first)
+                    self.assertEqual(parsed["model"], "custom")
+                    self.assertIn("fusion_flow", parsed["mcp_servers"])
+                    if "other" in tomllib.loads(original).get("mcp_servers", {}):
+                        self.assertEqual(
+                            parsed["mcp_servers"]["other"],
+                            tomllib.loads(original)["mcp_servers"]["other"],
+                        )
+                        self.assertIn("# keep me", first)
+
+                    configure_codex_mcp(config, Path(raw) / "new", Path(raw) / "workspace")
+                    second = config.read_text(encoding="utf-8")
+                    reparsed = tomllib.loads(second)
+                    self.assertEqual(
+                        reparsed["mcp_servers"]["fusion_flow"]["env"]["PYTHONPATH"],
+                        str((Path(raw) / "new" / "src").resolve()),
+                    )
+                    self.assertEqual(second.count("# BEGIN dynamic-workflow"), 1)
+                    self.assertEqual(second.count("# END dynamic-workflow"), 1)
+
     def test_invalid_config_and_incomplete_managed_block_are_not_written(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "config.toml"
