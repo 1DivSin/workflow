@@ -33,6 +33,9 @@ jobs:
       - name: Install declared Python dependencies with Hermes support
         if: matrix.host == 'hermes'
         run: uv sync --python 3.12 --extra hermes
+      - name: Verify base install excludes Hermes
+        if: matrix.host != 'hermes'
+        run: uv run python -c "import importlib.util; assert importlib.util.find_spec('hermes_agent') is None"
       - name: Install native Codex
         if: matrix.host == 'codex'
         run: npm install --global @openai/codex
