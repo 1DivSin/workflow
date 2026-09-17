@@ -5,7 +5,12 @@ import { readFileSync, existsSync } from "node:fs";
 
 const pluginRoot = path.dirname(fileURLToPath(import.meta.url));
 const string = { type: "string" };
-const parameters = (properties, required = []) => ({type: "object", properties, required, additionalProperties: false});
+const parameters = (properties, required = []) => ({
+  type: "object",
+  properties,
+  required,
+  additionalProperties: false,
+});
 
 export function decodeBridgeEnvelope(stdout) {
   const raw = stdout.trim();
@@ -30,13 +35,18 @@ export function decodeBridgeEnvelope(stdout) {
   return { content: [{ type: "text", text }], details };
 }
 
-function runWorkflow(name, params, workspace, config, signal) {
-  const settingsPath = path.join(pluginRoot, "runtime.json");
-  const installed = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf8")) : {};
-  const runtimeRoot = config.runtimeRoot || process.env.DYNAMIC_WORKFLOW_ROOT || installed.runtimeRoot || path.resolve(pluginRoot, "../..");
-  const python = config.python || process.env.DYNAMIC_WORKFLOW_PYTHON || installed.python || (process.platform === "win32" ? "python" : "python3");
-  workspace ||= config.workspace || installed.workspace;
-  if (!workspace) throw new Error("OpenClaw did not supply a workflow workspace");
+function legacyBridge(config, installed) {
+  const runtimeRoot =
+    config.runtimeRoot ||
+    process.env.DYNAMIC_WORKFLOW_ROOT ||
+    installed.runtimeRoot ||
+    path.resolve(pluginRoot, "../..");
+  const python =
+    config.python ||
+    process.env.DYNAMIC_WORKFLOW_PYTHON ||
+    installed.python;
+  if (!python) return null;
+
   const code = [
     "import asyncio, json, sys",
     "from flow_manage import flow_manage",
@@ -51,13 +61,56 @@ function runWorkflow(name, params, workspace, config, signal) {
     "else:",
     "    print(json.dumps({'ok': True, 'result': result}, ensure_ascii=False))",
   ].join("\n");
+  return {
+    command: [python, "-c", code],
+    env: {
+      PYTHONPATH: [path.join(runtimeRoot, "src"), process.env.PYTHONPATH]
+        .filter(Boolean)
+        .join(path.delimiter),
+    },
+  };
+}
+
+function resolveBridge(config, installed) {
+  const configured = config.toolCommand || installed.toolCommand;
+  if (configured) {
+    if (!Array.isArray(configured) || configured.length === 0 || configured.some(x => typeof x !== "string")) {
+      throw new Error("toolCommand must be a non-empty string array");
+    }
+    return { command: configured, env: {} };
+  }
+  if (process.env.DYNAMIC_WORKFLOW_TOOL) {
+    return { command: [process.env.DYNAMIC_WORKFLOW_TOOL], env: {} };
+  }
+  const legacy = legacyBridge(config, installed);
+  if (legacy) return legacy;
+  return { command: ["dynamic-workflow-tool"], env: {} };
+}
+
+function runWorkflow(name, params, workspace, config, signal) {
+  const settingsPath = path.join(pluginRoot, "runtime.json");
+  const installed = existsSync(settingsPath)
+    ? JSON.parse(readFileSync(settingsPath, "utf8"))
+    : {};
+  const bridge = resolveBridge(config, installed);
+  workspace ||= config.workspace || installed.workspace;
+  if (!workspace) throw new Error("OpenClaw did not supply a workflow workspace");
+
+  const [command, ...prefix] = bridge.command;
+  const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
   return new Promise((resolve, reject) => {
-    const child = spawn(python, ["-c", code, name], {
+    const child = spawn(command, [...prefix, name], {
       cwd: workspace,
-      env: { ...process.env, PYTHONIOENCODING: "utf-8", PSI_WORKFLOW_HOST: "openclaw", PSI_WORKFLOW_WORKSPACE: workspace,
-        PYTHONPATH: [path.join(runtimeRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) },
+      env: {
+        ...process.env,
+        ...bridge.env,
+        PYTHONIOENCODING: "utf-8",
+        PSI_WORKFLOW_HOST: "openclaw",
+        PSI_WORKFLOW_WORKSPACE: workspace,
+      },
       stdio: ["pipe", "pipe", "pipe"],
       signal,
+      shell: useShell,
     });
     let stdout = "";
     let stderr = "";
@@ -65,9 +118,14 @@ function runWorkflow(name, params, workspace, config, signal) {
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
-      if (stdout.length > 4 * 1024 * 1024) { child.kill(); reject(new Error("Workflow output exceeded 4 MiB")); }
+      if (stdout.length > 4 * 1024 * 1024) {
+        child.kill();
+        reject(new Error("Workflow output exceeded 4 MiB"));
+      }
     });
-    child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-65536); });
+    child.stderr.on("data", (chunk) => {
+      stderr = (stderr + chunk).slice(-65536);
+    });
     child.stdin.on("error", reject);
     child.stdin.end(JSON.stringify(params));
     child.on("error", reject);
@@ -92,31 +150,43 @@ export default {
       name: "run_flow",
       description: "Run a workspace-local FusionFlow workflow.",
       parameters: parameters({
-        flow_path: string, inputs_json: string, resource_capacities_json: string,
-        max_loop_epochs: { type: "integer", minimum: 1 }
+        flow_path: string,
+        inputs_json: string,
+        resource_capacities_json: string,
+        max_loop_epochs: { type: "integer", minimum: 1 },
       }, ["flow_path"]),
       async execute(_id, params, signal) {
         return runWorkflow("run_flow", params, context.workspaceDir, config, signal);
-      }
+      },
     }), { name: "run_flow" });
     api.registerTool((context) => ({
       name: "run_flow_resume",
       description: "Resume a waiting Human Step.",
-      parameters: parameters({run_id: string, request_id: string, human_response_json: string}, ["run_id", "request_id", "human_response_json"]),
+      parameters: parameters({
+        run_id: string,
+        request_id: string,
+        human_response_json: string,
+      }, ["run_id", "request_id", "human_response_json"]),
       async execute(_id, params, signal) {
         return runWorkflow("run_flow_resume", params, context.workspaceDir, config, signal);
-      }
+      },
     }), { name: "run_flow_resume" });
     api.registerTool((context) => ({
       name: "flow_manage",
       description: "Manage reusable FusionFlow workflow assets.",
       parameters: parameters({
-        action: string, flow_name: string, description: string, category: string,
-        body: string, flow_source: string, flow_ts: string, target: string
+        action: string,
+        flow_name: string,
+        description: string,
+        category: string,
+        body: string,
+        flow_source: string,
+        flow_ts: string,
+        target: string,
       }),
       async execute(_id, params, signal) {
         return runWorkflow("flow_manage", params, context.workspaceDir, config, signal);
-      }
+      },
     }), { name: "flow_manage" });
-  }
+  },
 };
