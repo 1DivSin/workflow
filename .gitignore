@@ -2,5 +2,9 @@ node_modules/
 __pycache__/
 *.py[cod]
 .venv/
+.uv-cache/
+.uv-python/
+.host-test/
+install-*.json
 dist/
 *.egg-info/
