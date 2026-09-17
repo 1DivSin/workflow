@@ -1,0 +1,29 @@
+name: OpenClaw plugin
+
+on:
+  pull_request:
+    paths:
+      - "plugins/openclaw-workflow/**"
+      - ".github/workflows/openclaw-plugin.yml"
+  push:
+    branches: ["codex/**"]
+    paths:
+      - "plugins/openclaw-workflow/**"
+      - ".github/workflows/openclaw-plugin.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --python 3.12
+      - run: uv run node --test plugins/openclaw-workflow/bridge.test.mjs
