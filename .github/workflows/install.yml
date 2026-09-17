@@ -1,0 +1,53 @@
+name: Workflow installation
+
+on:
+  pull_request:
+  push:
+    branches: ['codex/**', main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: ${{ matrix.host }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        host: [codex, hermes, openclaw]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Install declared Python dependencies
+        run: uv sync --python 3.12
+      - name: Install native Codex
+        if: matrix.host == 'codex'
+        run: npm install --global @openai/codex
+      - name: Verify native Hermes
+        if: matrix.host == 'hermes'
+        run: uv run hermes --help
+      - name: Install native OpenClaw
+        if: matrix.host == 'openclaw'
+        run: npm install --global openclaw@2026.9.4
+      - name: Configuration and runtime regression tests
+        run: uv run pytest tests -q
+      - name: OpenClaw Python subprocess bridge
+        if: matrix.host == 'openclaw'
+        run: uv run node --test plugins/openclaw-workflow/bridge.test.mjs
+      - name: Install, read native registration, and call an actual MCP tool
+        run: uv run python scripts/check_install.py --host ${{ matrix.host }} --report installation-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installation-${{ matrix.host }}-${{ matrix.os }}
+          path: installation-report.json
+          if-no-files-found: ignore
