@@ -10,11 +10,19 @@ from .uninstaller import uninstall
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="method-installer")
+    parser = argparse.ArgumentParser(prog="dynamic-workflow")
     subparsers = parser.add_subparsers(dest="command", required=True)
     detect = subparsers.add_parser("detect")
-    installer = subparsers.add_parser("installer")
-    installer.add_argument("source", nargs="?", default=".")
+    installer = subparsers.add_parser("install", aliases=["installer"])
+    installer.add_argument(
+        "source",
+        nargs="?",
+        default=None,
+        help=(
+            "Optional source checkout for development mode. "
+            "Omit after `uv tool install` to use the installed runtime."
+        ),
+    )
     installer.add_argument("--destination")
     installer.add_argument("--register-plugin", action="store_true")
     installer.add_argument(
@@ -22,7 +30,7 @@ def main(argv=None):
         action="store_true",
         help="Pass OpenClaw capability consent to its native installer",
     )
-    uninstaller = subparsers.add_parser("uninstaller")
+    uninstaller = subparsers.add_parser("uninstall", aliases=["uninstaller"])
     uninstaller.add_argument("--target")
     uninstaller.add_argument("--purge-state", action="store_true")
     doctor = subparsers.add_parser("doctor")
@@ -33,7 +41,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
     selected_host = args.host
-    if args.command == "installer" and args.register_plugin:
+    if args.command in {"install", "installer"} and args.register_plugin:
         if selected_host not in (None, "openclaw"):
             parser.error("--register-plugin requires --host openclaw")
         selected_host = "openclaw"
@@ -44,16 +52,12 @@ def main(argv=None):
     host = detect_host(args.workspace, target=selected_host, environ=environment)
     host["workspace"] = str(args.workspace.resolve())
 
-    if args.command == "installer":
-        # Keep the main-branch contract: target selection is passed to install(),
-        # which owns final host-availability validation.  The pre-detected host is
-        # used only when it actually matches the requested target so --workspace
-        # can be carried through without changing that contract.
+    if args.command in {"install", "installer"}:
         install_host = host
         if selected_host and (host["name"] != selected_host or not host["available"]):
             install_host = None
         print(
-            "installed to",
+            "installed integration to",
             install(
                 args.source,
                 host=install_host,
@@ -72,7 +76,7 @@ def main(argv=None):
 
     if args.command == "detect":
         print(json.dumps(host, indent=2))
-    elif args.command == "uninstaller":
+    elif args.command in {"uninstall", "uninstaller"}:
         for path in uninstall(host=host, target=args.target, purge_state=args.purge_state):
             print("removed", path)
     else:

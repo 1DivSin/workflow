@@ -23,15 +23,28 @@ class HermesInstallTests(unittest.TestCase):
             for original in originals:
                 with self.subTest(original=original):
                     config.write_text(original, encoding='utf-8')
-                    configure_hermes_mcp(config, Path(raw)/'runtime', raw)
+                    configure_hermes_mcp(
+                        config,
+                        ("/opt/dynamic-workflow-mcp", "--stdio"),
+                        raw,
+                    )
                     result = config.read_text(encoding='utf-8')
                     parsed, before = yaml.safe_load(result), yaml.safe_load(original)
                     self.assertEqual(parsed['display'], before['display'])
                     servers = parsed['mcp_servers']
-                    self.assertEqual(servers['fusion_flow']['args'], ['-m','fusion_flow.mcp_server'])
+                    self.assertEqual(
+                        servers['fusion_flow']['command'],
+                        '/opt/dynamic-workflow-mcp',
+                    )
+                    self.assertEqual(servers['fusion_flow']['args'], ['--stdio'])
+                    self.assertNotIn('PYTHONPATH', servers['fusion_flow']['env'])
                     for key, value in (before['mcp_servers'] or {}).items():
                         self.assertEqual(servers[key], value)
-                    configure_hermes_mcp(config, Path(raw)/'runtime', raw)
+                    configure_hermes_mcp(
+                        config,
+                        ("/opt/dynamic-workflow-mcp", "--stdio"),
+                        raw,
+                    )
                     self.assertEqual(config.read_text(encoding='utf-8'), result)
 
     def test_alias_mcp_servers_is_rejected_without_mutation(self):
@@ -45,7 +58,7 @@ class HermesInstallTests(unittest.TestCase):
             config = Path(raw) / 'config.yaml'
             config.write_text(original, encoding='utf-8')
             with self.assertRaises(ValueError):
-                configure_hermes_mcp(config, Path(raw) / 'runtime', raw)
+                configure_hermes_mcp(config, ("dynamic-workflow-mcp",), raw)
             self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_invalid_config_is_unchanged(self):
@@ -54,26 +67,31 @@ class HermesInstallTests(unittest.TestCase):
             for original in ('mcp_servers: [unterminated\n', 'mcp_servers: [wrong, type]\n'):
                 config.write_text(original, encoding='utf-8')
                 with self.assertRaises((ValueError, yaml.YAMLError)):
-                    configure_hermes_mcp(config, raw, raw)
+                    configure_hermes_mcp(config, ("dynamic-workflow-mcp",), raw)
                 self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_adds_managed_mcp_server_without_touching_existing_config(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "config.yaml"
             config.write_text("mcp_servers:\n  other:\n    command: other\n", encoding="utf-8")
-            configure_hermes_mcp(config, Path(raw) / "runtime", Path(raw) / "workspace")
+            configure_hermes_mcp(
+                config,
+                ("/opt/dynamic-workflow-mcp",),
+                Path(raw) / "workspace",
+            )
             text = config.read_text(encoding="utf-8")
             self.assertIn("  other:\n    command: other", text)
             self.assertIn("  fusion_flow:", text)
-            self.assertIn("fusion_flow.mcp_server", text)
+            self.assertIn("dynamic-workflow-mcp", text)
             self.assertEqual(text.count("fusion_flow:"), 1)
 
     def test_is_idempotent_and_creates_config(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "nested" / "config.yaml"
-            configure_hermes_mcp(config, Path(raw) / "runtime", Path(raw) / "workspace")
+            command = ("/opt/dynamic-workflow-mcp",)
+            configure_hermes_mcp(config, command, Path(raw) / "workspace")
             first = config.read_text(encoding="utf-8")
-            configure_hermes_mcp(config, Path(raw) / "runtime", Path(raw) / "workspace")
+            configure_hermes_mcp(config, command, Path(raw) / "workspace")
             self.assertEqual(config.read_text(encoding="utf-8"), first)
 
     def test_preserves_existing_user_server_configuration(self):
@@ -82,11 +100,15 @@ class HermesInstallTests(unittest.TestCase):
             original = (
                 "mcp_servers:\n"
                 "  fusion_flow:\n"
-                "    command: /user/selected/python\n"
+                "    command: /user/selected/runtime\n"
                 "    args: [custom-server]\n"
             )
             config.write_text(original, encoding="utf-8")
-            configure_hermes_mcp(config, Path(raw) / "runtime", Path(raw) / "workspace")
+            configure_hermes_mcp(
+                config,
+                ("/opt/dynamic-workflow-mcp",),
+                Path(raw) / "workspace",
+            )
             self.assertEqual(config.read_text(encoding="utf-8"), original)
 
 

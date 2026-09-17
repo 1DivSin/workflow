@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 import shutil
 import subprocess
-import yaml
+import sys
+import sysconfig
 import tomllib
 from pathlib import Path
 from typing import Callable, Sequence
+
+import yaml
 
 from .detect import detect_host
 
@@ -45,16 +47,34 @@ def _toml_inline_value(value: object) -> str:
     raise ValueError(f"Unsupported TOML value in inline mcp_servers: {type(value).__name__}")
 
 
-def _codex_server_spec(runtime: str | Path, workspace: str | Path) -> dict[str, object]:
+def _normalize_command(command: Sequence[str]) -> tuple[str, ...]:
+    normalized = tuple(str(part) for part in command)
+    if not normalized or not normalized[0]:
+        raise ValueError("Runtime command must contain an executable")
+    return normalized
+
+
+def _server_spec(
+    command: Sequence[str],
+    workspace: str | Path,
+    host: str,
+) -> dict[str, object]:
+    runtime = _normalize_command(command)
     return {
-        "command": sys.executable,
-        "args": ["-m", "fusion_flow.mcp_server"],
+        "command": runtime[0],
+        "args": list(runtime[1:]),
         "env": {
-            "PYTHONPATH": str(Path(runtime).resolve() / "src"),
-            "PSI_WORKFLOW_HOST": "codex",
+            "PSI_WORKFLOW_HOST": host,
             "PSI_WORKFLOW_WORKSPACE": str(Path(workspace).resolve()),
         },
     }
+
+
+def _codex_server_spec(
+    command: Sequence[str],
+    workspace: str | Path,
+) -> dict[str, object]:
+    return _server_spec(command, workspace, "codex")
 
 
 def _inline_mcp_servers_line(lines: list[str]) -> int | None:
@@ -66,7 +86,7 @@ def _inline_mcp_servers_line(lines: list[str]) -> int | None:
 
 def configure_codex_mcp(
     config: str | Path,
-    runtime: str | Path,
+    mcp_command: Sequence[str],
     workspace: str | Path,
 ) -> Path:
     """Register the workflow MCP server in Codex config idempotently."""
@@ -90,11 +110,11 @@ def configure_codex_mcp(
             inline_index is not None and _CODEX_INLINE_MANAGED in lines[inline_index]
         )
         if "fusion_flow" in servers and not inline_is_managed:
-            return path  # An existing user-owned server is authoritative.
+            return path
 
         if inline_index is not None:
             updated_servers = dict(servers)
-            updated_servers["fusion_flow"] = _codex_server_spec(runtime, workspace)
+            updated_servers["fusion_flow"] = _codex_server_spec(mcp_command, workspace)
             lines[inline_index] = (
                 f"mcp_servers = {_toml_inline_value(updated_servers)}  {_CODEX_INLINE_MANAGED}"
             )
@@ -107,19 +127,17 @@ def configure_codex_mcp(
             lines.append("")
         start, end = len(lines), len(lines) - 1
 
-    lines[start : end + 1] = (
-        [
-            _CODEX_BEGIN,
-            "[mcp_servers.fusion_flow]",
-            f"command = {json.dumps(sys.executable)}",
-            'args = ["-m", "fusion_flow.mcp_server"]',
-            "[mcp_servers.fusion_flow.env]",
-            f"PYTHONPATH = {json.dumps(str(Path(runtime).resolve() / 'src'))}",
-            'PSI_WORKFLOW_HOST = "codex"',
-            f"PSI_WORKFLOW_WORKSPACE = {json.dumps(str(Path(workspace).resolve()))}",
-            _CODEX_END,
-        ]
-    )
+    server = _codex_server_spec(mcp_command, workspace)
+    lines[start : end + 1] = [
+        _CODEX_BEGIN,
+        "[mcp_servers.fusion_flow]",
+        f"command = {json.dumps(server['command'])}",
+        f"args = {_toml_inline_value(server['args'])}",
+        "[mcp_servers.fusion_flow.env]",
+        'PSI_WORKFLOW_HOST = "codex"',
+        f"PSI_WORKFLOW_WORKSPACE = {json.dumps(server['env']['PSI_WORKFLOW_WORKSPACE'])}",
+        _CODEX_END,
+    ]
 
     result = "\n".join(lines).rstrip() + "\n"
     tomllib.loads(result)
@@ -129,7 +147,7 @@ def configure_codex_mcp(
 
 def configure_hermes_mcp(
     config: str | Path,
-    runtime: str | Path,
+    mcp_command: Sequence[str],
     workspace: str | Path,
 ) -> Path:
     """Add the workflow MCP server without overwriting user configuration."""
@@ -154,7 +172,7 @@ def configure_hermes_mcp(
     if servers is not None and not isinstance(servers, dict):
         raise ValueError("mcp_servers must be a YAML mapping")
     if isinstance(servers, dict) and "fusion_flow" in servers:
-        return path  # Preserve an existing user-owned server, including its comments.
+        return path
 
     document = yaml.compose(remaining)
     entries = [] if document is None else [
@@ -177,22 +195,21 @@ def configure_hermes_mcp(
             insertion = first_child.start_mark.line
             indent = first_child.start_mark.column
         else:
-            # Turn an empty mapping or null into a block mapping, keeping comments.
             remaining = remaining[:value.start_mark.index] + remaining[value.end_mark.index:]
             lines = remaining.splitlines()
             insertion = key.start_mark.line + 1
 
+    server = _server_spec(mcp_command, workspace, "hermes")
     block = [
-            _HERMES_BEGIN,
-            "  fusion_flow:",
-            f"    command: {json.dumps(sys.executable)}",
-            '    args: ["-m", "fusion_flow.mcp_server"]',
-            "    env:",
-            f"      PYTHONPATH: {json.dumps(str(Path(runtime).resolve() / 'src'))}",
-            '      PSI_WORKFLOW_HOST: "hermes"',
-            f"      PSI_WORKFLOW_WORKSPACE: {json.dumps(str(Path(workspace).resolve()))}",
-            _HERMES_END,
-        ]
+        _HERMES_BEGIN,
+        "  fusion_flow:",
+        f"    command: {json.dumps(server['command'])}",
+        f"    args: {json.dumps(server['args'])}",
+        "    env:",
+        '      PSI_WORKFLOW_HOST: "hermes"',
+        f"      PSI_WORKFLOW_WORKSPACE: {json.dumps(server['env']['PSI_WORKFLOW_WORKSPACE'])}",
+        _HERMES_END,
+    ]
     lines[insertion:insertion] = [" " * indent + line[2:] for line in block]
     result = "\n".join(lines).rstrip() + "\n"
     yaml.safe_load(result)
@@ -209,7 +226,6 @@ def _openclaw_cli_command(executable: str | Path, *arguments: str) -> tuple[str,
 
 
 def _openclaw_plugin_command(executable: str | Path, plugin_dir: Path) -> tuple[str, ...]:
-    """Backward-compatible plugin-install command builder from the main branch."""
     return _openclaw_cli_command(
         executable,
         "plugins",
@@ -220,14 +236,124 @@ def _openclaw_plugin_command(executable: str | Path, plugin_dir: Path) -> tuple[
     )
 
 
+def _installed_assets_root() -> Path:
+    return Path(sysconfig.get_path("data")) / "share" / "dynamic-workflow"
+
+
+def _asset_layout(source: str | Path | None) -> dict[str, Path]:
+    if source is not None:
+        root = Path(source).resolve()
+        layout = {
+            "skill": root / "src" / "SKILL.md",
+            "grammar": root / "src" / "grammar",
+            "examples": root / "examples",
+            "plugin": root / "plugins" / "openclaw-workflow",
+        }
+    else:
+        root = _installed_assets_root()
+        layout = {
+            "skill": root / "SKILL.md",
+            "grammar": root / "grammar",
+            "examples": root / "examples",
+            "plugin": root / "openclaw-workflow",
+        }
+    if not layout["skill"].is_file():
+        mode = f"source tree {root}" if source is not None else f"installed package data {root}"
+        raise FileNotFoundError(f"Workflow {mode} has no SKILL.md")
+    return layout
+
+
+def _copy_runtime_assets(layout: dict[str, Path], destination: Path) -> None:
+    (destination / "src").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(layout["skill"], destination / "src" / "SKILL.md")
+    if layout["grammar"].is_dir():
+        shutil.copytree(layout["grammar"], destination / "src" / "grammar", dirs_exist_ok=True)
+    if layout["examples"].is_dir():
+        shutil.copytree(layout["examples"], destination / "examples", dirs_exist_ok=True)
+    if layout["plugin"].is_dir():
+        shutil.copytree(
+            layout["plugin"],
+            destination / "plugins" / "openclaw-workflow",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("bridge.test.mjs", "runtime.json"),
+        )
+
+
+def _entrypoint_path(name: str) -> str:
+    found = shutil.which(name)
+    if found:
+        return str(Path(found).absolute())
+
+    current = Path(sys.argv[0]).expanduser()
+    if current.exists():
+        suffixes = [current.suffix] if current.suffix else [""]
+        if os.name == "nt":
+            suffixes.extend(
+                suffix for suffix in (".exe", ".cmd", ".bat") if suffix not in suffixes
+            )
+        for suffix in suffixes:
+            sibling = current.absolute().with_name(name + suffix)
+            if sibling.is_file():
+                return str(sibling)
+    raise FileNotFoundError(
+        f"{name} is not installed. Install the runtime with "
+        "`uv tool install git+https://github.com/1DivSin/workflow.git`."
+    )
+
+
+def _resolve_runtime_commands(
+    source: str | Path | None,
+    *,
+    mcp_command: Sequence[str] | None = None,
+    tool_command: Sequence[str] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    """Resolve installed CLI entrypoints or an explicit uv-backed source runtime."""
+    if source is None:
+        mcp = (
+            _normalize_command(mcp_command)
+            if mcp_command
+            else (_entrypoint_path("dynamic-workflow-mcp"),)
+        )
+        tool = (
+            _normalize_command(tool_command)
+            if tool_command
+            else (_entrypoint_path("dynamic-workflow-tool"),)
+        )
+        return mcp, tool, "installed"
+
+    project = Path(source).resolve()
+    if mcp_command is not None and tool_command is not None:
+        return _normalize_command(mcp_command), _normalize_command(tool_command), "source"
+
+    uv = shutil.which("uv")
+    if not uv:
+        raise FileNotFoundError(
+            "uv is required for source-runtime installation; install with `uv tool install` "
+            "for a source-independent runtime"
+        )
+    mcp = (
+        _normalize_command(mcp_command)
+        if mcp_command
+        else (str(Path(uv).resolve()), "run", "--project", str(project), "dynamic-workflow-mcp")
+    )
+    tool = (
+        _normalize_command(tool_command)
+        if tool_command
+        else (str(Path(uv).resolve()), "run", "--project", str(project), "dynamic-workflow-tool")
+    )
+    return mcp, tool, "source"
+
+
 def install(
-    source,
+    source=None,
     host=None,
     destination=None,
     *,
     target_host: str | None = None,
     register_plugin: bool = False,
     accept_capabilities: bool = False,
+    mcp_command: Sequence[str] | None = None,
+    tool_command: Sequence[str] | None = None,
     runner: Callable[..., object] = subprocess.run,
 ):
     if register_plugin:
@@ -241,20 +367,23 @@ def install(
     if target_host is not None and h.get("name") != target_host:
         raise RuntimeError(f"Requested host {target_host!r} is not available")
 
-    s = Path(source).resolve()
+    layout = _asset_layout(source)
+    source_root = Path(source).resolve() if source is not None else None
     d = Path(destination or Path(h["tools_dir"]) / "genuineknowledge-method").resolve()
-    if d == s or d in s.parents or s in d.parents:
+    if source_root is not None and (
+        d == source_root or d in source_root.parents or source_root in d.parents
+    ):
         raise ValueError("Runtime destination must be separate from the source tree")
-    if not (s / "src" / "SKILL.md").is_file():
-        raise FileNotFoundError(f"Workflow source has no src/SKILL.md: {s}")
+
     if register_plugin and h.get("name") != "openclaw":
         raise ValueError("--register-plugin is only supported for OpenClaw")
+    if register_plugin and not (layout["plugin"] / "openclaw.plugin.json").is_file():
+        raise FileNotFoundError(
+            f"OpenClaw plugin manifest is missing: {layout['plugin'] / 'openclaw.plugin.json'}"
+        )
 
     plugin_executable: str | Path | None = None
     if register_plugin:
-        plugin_source = s / "plugins" / "openclaw-workflow"
-        if not (plugin_source / "openclaw.plugin.json").is_file():
-            raise FileNotFoundError(f"OpenClaw plugin manifest is missing: {plugin_source}")
         plugin_executable = (
             h.get("executable")
             or os.getenv("OPENCLAW_EXECUTABLE")
@@ -262,66 +391,46 @@ def install(
         )
         if not plugin_executable:
             raise FileNotFoundError(
-                "OpenClaw executable is required to register the plugin; set OPENCLAW_EXECUTABLE when OPENCLAW_COMMAND uses a wrapper"
+                "OpenClaw executable is required to register the plugin; set "
+                "OPENCLAW_EXECUTABLE when OPENCLAW_COMMAND uses a wrapper"
             )
+
+    resolved_mcp, resolved_tool, runtime_mode = _resolve_runtime_commands(
+        source_root,
+        mcp_command=mcp_command,
+        tool_command=tool_command,
+    )
 
     d.parent.mkdir(parents=True, exist_ok=True)
     if d.exists():
         shutil.rmtree(d)
-
-    shutil.copytree(
-        s,
-        d,
-        ignore=shutil.ignore_patterns(
-            "__pycache__",
-            "*.pyc",
-            ".git",
-            "*.egg-info",
-            ".venv",
-            "node_modules",
-            ".uv-cache",
-            ".uv-python",
-            "dist",
-            "build",
-        ),
-    )
+    _copy_runtime_assets(layout, d)
 
     skill_dir = Path(h["skills_dir"]) / "workflow"
     skill_source = d / "src" / "SKILL.md"
-    if skill_source.is_file():
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(skill_source, skill_dir / "SKILL.md")
-        for resource in ("grammar", "examples"):
-            source_resource = d / "src" / resource if resource == "grammar" else d / resource
-            if source_resource.is_dir():
-                shutil.copytree(source_resource, skill_dir / resource, dirs_exist_ok=True)
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(skill_source, skill_dir / "SKILL.md")
+    for resource, source_resource in (
+        ("grammar", d / "src" / "grammar"),
+        ("examples", d / "examples"),
+    ):
+        if source_resource.is_dir():
+            shutil.copytree(source_resource, skill_dir / resource, dirs_exist_ok=True)
 
     if h["name"] == "codex":
         home = Path(h.get("home", Path(h["state_dir"]).parent))
         configure_codex_mcp(
             Path(os.getenv("CODEX_CONFIG", str(home / "config.toml"))),
-            d,
+            resolved_mcp,
             h.get("workspace", "."),
         )
 
     if h["name"] == "hermes":
         configure_hermes_mcp(
             Path(h["home"]) / "config.yaml",
-            d,
+            resolved_mcp,
             h["workspace"],
         )
-        Path(h["state_dir"]).mkdir(parents=True, exist_ok=True)
-        (Path(h["state_dir"]) / "genuineknowledge-method.json").write_text(
-            json.dumps(
-                {
-                    "target": str(d),
-                    "skill_dir": str(Path(h["skills_dir"]) / "workflow"),
-                    "host": h["name"],
-                },
-                indent=2,
-            )
-        )
-        return d
 
     plugin_dir = d / "plugins" / "openclaw-workflow"
     registered = False
@@ -329,10 +438,11 @@ def install(
         (plugin_dir / "runtime.json").write_text(
             json.dumps(
                 {
-                    "runtimeRoot": str(d),
-                    "python": sys.executable,
+                    "mcpCommand": list(resolved_mcp),
+                    "toolCommand": list(resolved_tool),
                     "workspace": str(Path(h.get("workspace", ".")).resolve()),
-                }
+                },
+                indent=2,
             ),
             encoding="utf-8",
         )
@@ -359,8 +469,12 @@ def install(
         "target": str(d),
         "skill_dir": str(skill_dir),
         "host": h["name"],
+        "runtime_mode": runtime_mode,
+        "mcp_command": list(resolved_mcp),
+        "tool_command": list(resolved_tool),
     }
-
+    if source_root is not None:
+        state["source"] = str(source_root)
     if plugin_dir.is_dir():
         state["plugin_dir"] = str(plugin_dir)
         state["plugin_registered"] = registered

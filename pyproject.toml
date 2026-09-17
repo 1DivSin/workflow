@@ -26,6 +26,7 @@ py-modules = ["run_flow", "flow_manage", "workflow_sample", "_runtime_paths", "_
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["fusion_flow*", "installer*"]
+
 [tool.ruff]
 line-length = 100
 target-version = 'py312'
@@ -37,9 +38,22 @@ check_untyped_defs = true
 
 [tool.setuptools.data-files]
 "share/dynamic-workflow" = ["src/SKILL.md"]
+"share/dynamic-workflow/grammar" = ["src/grammar/FusionFlow.g4"]
+"share/dynamic-workflow/examples" = [
+    "examples/loop_engineering.workflow",
+    "examples/react_loop.workflow",
+    "examples/terminal_identity.py",
+]
+"share/dynamic-workflow/openclaw-workflow" = [
+    "plugins/openclaw-workflow/index.js",
+    "plugins/openclaw-workflow/openclaw.plugin.json",
+    "plugins/openclaw-workflow/package.json",
+]
 
 [project.scripts]
 dynamic-workflow = "installer.cli:main"
+dynamic-workflow-mcp = "fusion_flow.mcp_server:main"
+dynamic-workflow-tool = "fusion_flow.bridge_cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]
