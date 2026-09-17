@@ -20,6 +20,134 @@ _HERMES_BEGIN = "  # BEGIN dynamic-workflow"
 _HERMES_END = "  # END dynamic-workflow"
 
 
+def _scan_toml_container(text: str, start: int, opener: str, closer: str) -> int:
+    """Return the matching closer while ignoring braces inside TOML strings."""
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote is not None:
+            if quote == '"' and escaped:
+                escaped = False
+                continue
+            if quote == '"' and char == "\\":
+                escaped = True
+                continue
+            if char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            continue
+        if char == opener:
+            depth += 1
+        elif char == closer:
+            depth -= 1
+            if depth == 0:
+                return index
+    raise ValueError("Unterminated inline TOML table")
+
+
+def _split_inline_toml_entries(body: str) -> list[str]:
+    """Split one TOML inline table at top-level commas without rewriting values."""
+    entries: list[str] = []
+    start = 0
+    braces = brackets = 0
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(body):
+        if quote is not None:
+            if quote == '"' and escaped:
+                escaped = False
+                continue
+            if quote == '"' and char == "\\":
+                escaped = True
+                continue
+            if char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char == "{":
+            braces += 1
+        elif char == "}":
+            braces -= 1
+        elif char == "[":
+            brackets += 1
+        elif char == "]":
+            brackets -= 1
+        elif char == "," and braces == 0 and brackets == 0:
+            entry = body[start:index].strip()
+            if entry:
+                entries.append(entry)
+            start = index + 1
+    entry = body[start:].strip()
+    if entry:
+        entries.append(entry)
+    return entries
+
+
+def _expand_inline_mcp_servers(lines: list[str]) -> tuple[list[str], int] | None:
+    """Expand root ``mcp_servers = {...}`` into equivalent dotted assignments."""
+    pattern = re.compile(r'^(?P<indent>\s*)(?:mcp_servers|"mcp_servers")\s*=\s*\{')
+    for index, line in enumerate(lines):
+        match = pattern.match(line)
+        if match is None:
+            continue
+        if match.group("indent"):
+            raise ValueError("mcp_servers must be a root TOML key")
+        open_index = line.find("{", match.start())
+        close_index = _scan_toml_container(line, open_index, "{", "}")
+        trailing = line[close_index + 1 :].strip()
+        if trailing and not trailing.startswith("#"):
+            raise ValueError("Unsupported content after inline mcp_servers table")
+        body = line[open_index + 1 : close_index]
+        replacement: list[str] = []
+        if trailing:
+            replacement.append(trailing)
+        replacement.extend(
+            f"mcp_servers.{entry}" for entry in _split_inline_toml_entries(body)
+        )
+        lines[index : index + 1] = replacement
+        return lines, index + len(replacement)
+    return None
+
+
+def _codex_managed_block(
+    runtime: str | Path,
+    workspace: str | Path,
+    *,
+    dotted: bool,
+) -> list[str]:
+    runtime_src = json.dumps(str(Path(runtime).resolve() / "src"))
+    workspace_value = json.dumps(str(Path(workspace).resolve()))
+    if dotted:
+        return [
+            _CODEX_BEGIN,
+            "mcp_servers.fusion_flow = { "
+            f"command = {json.dumps(sys.executable)}, "
+            'args = ["-m", "fusion_flow.mcp_server"], '
+            "env = { "
+            f"PYTHONPATH = {runtime_src}, "
+            'PSI_WORKFLOW_HOST = "codex", '
+            f"PSI_WORKFLOW_WORKSPACE = {workspace_value} "
+            "} }",
+            _CODEX_END,
+        ]
+    return [
+        _CODEX_BEGIN,
+        "[mcp_servers.fusion_flow]",
+        f"command = {json.dumps(sys.executable)}",
+        'args = ["-m", "fusion_flow.mcp_server"]',
+        "[mcp_servers.fusion_flow.env]",
+        f"PYTHONPATH = {runtime_src}",
+        'PSI_WORKFLOW_HOST = "codex"',
+        f"PSI_WORKFLOW_WORKSPACE = {workspace_value}",
+        _CODEX_END,
+    ]
+
+
 def configure_codex_mcp(
     config: str | Path,
     runtime: str | Path,
@@ -36,28 +164,31 @@ def configure_codex_mcp(
             raise ValueError("Incomplete or duplicate dynamic-workflow config markers")
         start = lines.index(_CODEX_BEGIN)
         end = lines.index(_CODEX_END, start)
+        dotted = any(
+            line.lstrip().startswith("mcp_servers.fusion_flow =")
+            for line in lines[start + 1 : end]
+        )
     else:
         servers = config_data.get("mcp_servers", {})
         if not isinstance(servers, dict):
             raise ValueError("mcp_servers must be a TOML table")
         if "fusion_flow" in servers:
             return path  # An existing user-owned server is authoritative.
-        if lines and lines[-1].strip():
-            lines.append("")
-        start, end = len(lines), len(lines) - 1
+        expanded = _expand_inline_mcp_servers(lines) if "mcp_servers" in config_data else None
+        if expanded is not None:
+            lines, start = expanded
+            end = start - 1
+            dotted = True
+        else:
+            if lines and lines[-1].strip():
+                lines.append("")
+            start, end = len(lines), len(lines) - 1
+            dotted = False
 
-    lines[start : end + 1] = (
-        [
-            _CODEX_BEGIN,
-            "[mcp_servers.fusion_flow]",
-            f"command = {json.dumps(sys.executable)}",
-            'args = ["-m", "fusion_flow.mcp_server"]',
-            "[mcp_servers.fusion_flow.env]",
-            f"PYTHONPATH = {json.dumps(str(Path(runtime).resolve() / 'src'))}",
-            'PSI_WORKFLOW_HOST = "codex"',
-            f"PSI_WORKFLOW_WORKSPACE = {json.dumps(str(Path(workspace).resolve()))}",
-            _CODEX_END,
-        ]
+    lines[start : end + 1] = _codex_managed_block(
+        runtime,
+        workspace,
+        dotted=dotted,
     )
 
     result = "\n".join(lines).rstrip() + "\n"
