@@ -41,7 +41,7 @@ class OpenClawHumanSandboxTests(unittest.IsolatedAsyncioTestCase):
                 env={"OPENCLAW_CONFIG_PATH": str(ambient), "PATH": os.environ.get("PATH", "")},
             )
             invocation = AgentInvocation("prepare question", "human-review-123", workspace)
-            with patch("fusion_flow.adapters.openclaw_cli.asyncio.create_subprocess_exec", side_effect=fake_create):
+            with patch("fusion_flow.adapters.openclaw_cli.create_subprocess_exec", side_effect=fake_create):
                 reply = await runtime.run_agent(invocation)
 
             self.assertTrue(reply.ok)
@@ -66,7 +66,7 @@ class OpenClawHumanSandboxTests(unittest.IsolatedAsyncioTestCase):
 
             runtime = OpenClawCliRuntime(command=("openclaw", "agent"))
             invocation = AgentInvocation("do work", "run-flow-step-123", workspace)
-            with patch("fusion_flow.adapters.openclaw_cli.asyncio.create_subprocess_exec", side_effect=fake_create):
+            with patch("fusion_flow.adapters.openclaw_cli.create_subprocess_exec", side_effect=fake_create):
                 reply = await runtime.run_agent(invocation)
 
             self.assertTrue(reply.ok)
