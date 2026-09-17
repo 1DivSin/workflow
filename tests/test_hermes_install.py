@@ -14,6 +14,7 @@ class HermesInstallTests(unittest.TestCase):
         originals = [
             'mcp_servers:\n  other:\n    command: other\ndisplay:\n  mode: compact\n',
             'mcp_servers:\n    other: {command: other}\n# display comment\ndisplay:\n    fusion_flow: user-data\n',
+            'mcp_servers: &servers\n  other:\n    command: other\ndisplay: {mode: compact}\n',
             'mcp_servers: {} # empty mapping\ndisplay: {mode: compact}\n',
             'mcp_servers: # no servers yet\ndisplay: {mode: compact}\n',
         ]
@@ -30,8 +31,24 @@ class HermesInstallTests(unittest.TestCase):
                     self.assertEqual(servers['fusion_flow']['args'], ['-m','fusion_flow.mcp_server'])
                     for key, value in (before['mcp_servers'] or {}).items():
                         self.assertEqual(servers[key], value)
+                    if '&servers' in original:
+                        self.assertIn('mcp_servers: &servers', result)
                     configure_hermes_mcp(config, Path(raw)/'runtime', raw)
                     self.assertEqual(config.read_text(encoding='utf-8'), result)
+
+    def test_alias_mapping_is_rejected_without_mutation(self):
+        original = (
+            'shared: &servers\n'
+            '  other:\n'
+            '    command: other\n'
+            'mcp_servers: *servers\n'
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / 'config.yaml'
+            config.write_text(original, encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'aliases cannot be extended safely'):
+                configure_hermes_mcp(config, Path(raw) / 'runtime', raw)
+            self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_invalid_config_is_unchanged(self):
         with tempfile.TemporaryDirectory() as raw:
