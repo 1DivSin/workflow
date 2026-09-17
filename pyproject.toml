@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Development-only ACP dependency. A discoverable Hermes host should be installed
+# separately as `hermes-agent[mcp,acp]`; uv does not expose dependency executables
+# from another installed tool on PATH.
 hermes = ["hermes-agent[acp]"]
 
 [tool.setuptools]

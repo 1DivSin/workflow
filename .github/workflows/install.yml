@@ -28,20 +28,20 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install declared Python dependencies
-        if: matrix.host != 'hermes'
         run: uv sync --python 3.12
-      - name: Install declared Python dependencies with Hermes support
-        if: matrix.host == 'hermes'
-        run: uv sync --python 3.12 --extra hermes
-      - name: Verify base install excludes Hermes
-        if: matrix.host != 'hermes'
+      - name: Verify Workflow environment excludes Hermes
         run: uv run python -c "import importlib.util; assert importlib.util.find_spec('hermes_agent') is None"
       - name: Install native Codex
         if: matrix.host == 'codex'
         run: npm install --global @openai/codex
+      - name: Install native Hermes
+        if: matrix.host == 'hermes'
+        run: uv tool install 'hermes-agent[mcp,acp]'
       - name: Verify native Hermes
         if: matrix.host == 'hermes'
-        run: uv run hermes --help
+        run: |
+          hermes --help
+          hermes-acp --check
       - name: Install native OpenClaw
         if: matrix.host == 'openclaw'
         run: npm install --global openclaw@2026.9.4

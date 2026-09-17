@@ -8,8 +8,7 @@ Prerequisites: uv and an installed host (Codex, Hermes, or OpenClaw).
 Authenticate the host with its normal setup before running model-backed workflows.
 For OpenClaw, use Node 26.1+ or 24.16+; the native integration is tested against 2026.9.4.
 Replace `/path/to/project` with an existing workspace (quote Windows paths).
-Keep the checkout and its uv environment: the registered server uses that interpreter.
-The base Python package intentionally does not install Hermes and its large dependency tree; only the Hermes setup enables the `hermes` extra.
+The Workflow runtime does not install or manage host runtimes. If Hermes is not already installed, install it separately with both MCP and ACP support as shown below.
 
 ### Recommended: install the runtime as a uv tool
 
@@ -27,16 +26,19 @@ interpreter that happened to run the installer.
 #### Codex
 
 ```sh
-git clone https://github.com/1DivSin/workflow.git workflow
-cd workflow
-uv sync --python 3.12 --extra hermes
-uv run dynamic-workflow installer . --host hermes --workspace /path/to/project
-uv run dynamic-workflow doctor --host hermes --workspace /path/to/project
+dynamic-workflow install --host codex --workspace /path/to/project
+dynamic-workflow doctor --host codex --workspace /path/to/project
 ```
 
 #### Hermes
 
+If Hermes is already installed with MCP and ACP support, skip the first three commands.
+Installing Hermes as its own uv tool exposes the `hermes` and `hermes-acp` executables on PATH; putting `hermes-agent` only inside Workflow's dependency environment does not.
+
 ```sh
+uv tool install 'hermes-agent[mcp,acp]'
+hermes --help
+hermes-acp --check
 dynamic-workflow install --host hermes --workspace /path/to/project
 dynamic-workflow doctor --host hermes --workspace /path/to/project
 ```
