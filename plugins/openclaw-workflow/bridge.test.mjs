@@ -1,9 +1,25 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import plugin from './index.js';
+import plugin, { decodeBridgeEnvelope } from './index.js';
+
+test('successful workflow output may contain an artifact named error', () => {
+  const decoded = decodeBridgeEnvelope(JSON.stringify({
+    ok: true,
+    result: JSON.stringify({error: 'artifact value'}),
+  }));
+  assert.deepEqual(decoded.details, {error: 'artifact value'});
+  assert.equal(decoded.content[0].text, '{"error":"artifact value"}');
+});
+
+test('bridge envelope reports execution errors explicitly', () => {
+  assert.throws(
+    () => decodeBridgeEnvelope(JSON.stringify({ok: false, error: 'boom'})),
+    /boom/,
+  );
+});
 
 test('registered tool runs Python with the active workspace and returns a tool result', async () => {
   const workspace = mkdtempSync(path.join(tmpdir(), 'workflow-plugin-'));
@@ -20,7 +36,6 @@ test('registered tool runs Python with the active workspace and returns a tool r
     const result = await manage.execute('test', {action: 'list'});
     assert.equal(result.content[0].type, 'text');
     assert.equal(result.content[0].text.trim(), 'No flows found.');
-    // Large Unicode inputs travel through stdin, not the process command line.
     const body = '安装验收 '.repeat(12000);
     const created = await manage.execute('test', {action: 'create', flow_name: 'ci-flow', body});
     assert.match(created.content[0].text, /created/i);
