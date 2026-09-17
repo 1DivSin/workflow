@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -28,5 +28,33 @@ test('registered tool runs Python with the active workspace and returns a tool r
     assert.match(listed.content[0].text, /ci-flow/);
   } finally {
     rmSync(workspace, {recursive: true, force: true});
+  }
+});
+
+test('workflow output may contain an artifact named error', async () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), 'workflow-plugin-error-artifact-'));
+  const runtime = mkdtempSync(path.join(tmpdir(), 'workflow-plugin-runtime-'));
+  const src = path.join(runtime, 'src');
+  mkdirSync(src);
+  writeFileSync(path.join(src, 'run_flow.py'), [
+    'import json',
+    'async def run_flow(**_kwargs): return json.dumps({"error": "artifact value"})',
+    'async def run_flow_resume(**_kwargs): return json.dumps({"error": "artifact value"})',
+  ].join('\n'));
+  writeFileSync(path.join(src, 'flow_manage.py'), 'async def flow_manage(**_kwargs): return "ok"\n');
+  const registrations = [];
+  plugin.register({
+    pluginConfig: {runtimeRoot: runtime, python: process.env.DYNAMIC_WORKFLOW_PYTHON || 'python'},
+    registerTool(factory, options) { registrations.push({factory, options}); },
+  });
+  try {
+    const tools = registrations.flatMap(({factory}) => typeof factory === 'function' ? factory({workspaceDir: workspace}) : factory);
+    const run = tools.find(t => t.name === 'run_flow');
+    const result = await run.execute('test', {flow_path: 'unused.workflow'});
+    assert.deepEqual(result.details, {error: 'artifact value'});
+    assert.equal(JSON.parse(result.content[0].text).error, 'artifact value');
+  } finally {
+    rmSync(workspace, {recursive: true, force: true});
+    rmSync(runtime, {recursive: true, force: true});
   }
 });
