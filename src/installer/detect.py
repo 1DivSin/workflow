@@ -24,6 +24,26 @@ def _split_command(value: str) -> tuple[str, ...]:
     return tuple(shlex.split(value))
 
 
+def _direct_host_executable(name: str, command_override: str) -> str | None:
+    """Return the override executable only when it directly names the host binary.
+
+    Command overrides may legitimately be wrappers such as ``uv run openclaw`` or
+    ``cmd /c openclaw``.  Their first token is not a host management executable
+    and must never be reused for commands such as ``plugins install``.
+    """
+    if not command_override:
+        return None
+    command = _split_command(command_override)
+    if not command:
+        return None
+    first = command[0]
+    basename = first.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    accepted = {name, f"{name}.exe", f"{name}.cmd", f"{name}.bat"}
+    if name == "hermes":
+        accepted.update({"hermes-acp", "hermes-acp.exe", "hermes-acp.cmd", "hermes-acp.bat"})
+    return first if basename in accepted else None
+
+
 def _available(
     name: str,
     *,
@@ -35,7 +55,10 @@ def _available(
         return True
     if environ.get(_COMMAND_OVERRIDES[name]):
         return True
-    return bool(which(name) or (home / f".{name}").exists())
+    host_home = Path(
+        environ.get(f"{name.upper()}_HOME", str(home / f".{name}"))
+    ).expanduser()
+    return bool(which(name) or host_home.exists())
 
 
 def detect_host(
@@ -46,7 +69,7 @@ def detect_host(
     environ: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
 ):
-    env = environ or os.environ
+    env = os.environ if environ is None else environ
     root_path = Path(root).resolve()
     home_path = (
         home or Path(env.get("USERPROFILE") or env.get("HOME") or Path.home())
@@ -67,11 +90,10 @@ def detect_host(
         else:
             skills_dir = Path(env.get("HERMES_SKILLS_DIR", str(host_home / "skills")))
 
-        executable = env.get(f"{name.upper()}_EXECUTABLE", "").strip() or None
         command_override = env.get(_COMMAND_OVERRIDES[name], "").strip()
-        if executable is None and command_override:
-            command = _split_command(command_override)
-            executable = command[0] if command else None
+        executable = env.get(f"{name.upper()}_EXECUTABLE", "").strip() or None
+        if executable is None:
+            executable = _direct_host_executable(name, command_override)
         if executable is None:
             executable = which(name)
 
