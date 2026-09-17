@@ -115,16 +115,62 @@ def configure_hermes_mcp(
     return path
 
 
+def _openclaw_plugin_command(executable: str | Path, plugin_dir: Path) -> tuple[str, ...]:
+    command = (
+        str(executable),
+        "plugins",
+        "install",
+        "--link",
+        str(plugin_dir),
+        "--force",
+    )
+    if sys.platform == "win32" and str(executable).lower().endswith((".cmd", ".bat")):
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        return (comspec, "/d", "/s", "/c", subprocess.list2cmdline(command))
+    return command
+
+
 def install(
     source,
     host=None,
     destination=None,
     *,
+    target_host: str | None = None,
     register_plugin: bool = False,
     runner: Callable[..., object] = subprocess.run,
 ):
-    h = host or detect_host()
+    if register_plugin:
+        if target_host not in (None, "openclaw"):
+            raise ValueError("--register-plugin requires the OpenClaw host")
+        if host is not None and host.get("name") != "openclaw":
+            raise ValueError("--register-plugin is only supported for OpenClaw")
+        target_host = "openclaw"
+
+    h = host or detect_host(target=target_host)
+    if target_host is not None and h.get("name") != target_host:
+        raise RuntimeError(f"Requested host {target_host!r} is not available")
+
     s = Path(source).resolve()
+
+    plugin_executable: str | Path | None = None
+    if register_plugin:
+        if h.get("name") != "openclaw":
+            raise ValueError("--register-plugin is only supported for OpenClaw")
+        plugin_source = s / "plugins" / "openclaw-workflow"
+        if not (plugin_source / "openclaw.plugin.json").is_file():
+            raise FileNotFoundError(
+                f"OpenClaw plugin manifest is missing: {plugin_source}"
+            )
+        plugin_executable = (
+            h.get("executable")
+            or os.getenv("OPENCLAW_EXECUTABLE")
+            or shutil.which("openclaw")
+        )
+        if not plugin_executable:
+            raise FileNotFoundError(
+                "OpenClaw executable is required to register the plugin"
+            )
+
     d = Path(destination or Path(h["tools_dir"]) / "genuineknowledge-method")
 
     d.parent.mkdir(parents=True, exist_ok=True)
@@ -181,30 +227,8 @@ def install(
     registered = False
 
     if register_plugin:
-        if h.get("name") != "openclaw":
-            raise ValueError(
-                "--register-plugin is only supported for OpenClaw"
-            )
-
-        if not (plugin_dir / "openclaw.plugin.json").is_file():
-            raise FileNotFoundError(
-                f"OpenClaw plugin manifest is missing: {plugin_dir}"
-            )
-
-        executable = h.get("executable") or shutil.which("openclaw")
-        if not executable:
-            raise FileNotFoundError(
-                "OpenClaw executable is required to register the plugin"
-            )
-
-        command: Sequence[str] = (
-            str(executable),
-            "plugins",
-            "install",
-            "--link",
-            str(plugin_dir),
-            "--force",
-        )
+        assert plugin_executable is not None
+        command: Sequence[str] = _openclaw_plugin_command(plugin_executable, plugin_dir)
         runner(command, check=True)
         registered = True
 

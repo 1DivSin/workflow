@@ -1,7 +1,7 @@
 import argparse
 import json
 
-from .detect import detect_host
+from .detect import HOSTS, detect_host
 from .doctor import diagnose
 from .installer import install
 from .uninstaller import uninstall
@@ -14,6 +14,7 @@ def main():
     installer = subparsers.add_parser("installer")
     installer.add_argument("source", nargs="?", default=".")
     installer.add_argument("--destination")
+    installer.add_argument("--host", choices=HOSTS)
     installer.add_argument("--register-plugin", action="store_true")
     uninstaller = subparsers.add_parser("uninstaller")
     uninstaller.add_argument("--target")
@@ -24,7 +25,20 @@ def main():
     if args.command == "detect":
         print(json.dumps(detect_host(), indent=2))
     elif args.command == "installer":
-        print("installed to", install(args.source, destination=args.destination, register_plugin=args.register_plugin))
+        target_host = args.host
+        if args.register_plugin:
+            if target_host not in (None, "openclaw"):
+                parser.error("--register-plugin requires --host openclaw")
+            target_host = "openclaw"
+        print(
+            "installed to",
+            install(
+                args.source,
+                destination=args.destination,
+                target_host=target_host,
+                register_plugin=args.register_plugin,
+            ),
+        )
     elif args.command == "uninstaller":
         for path in uninstall(target=args.target, purge_state=args.purge_state):
             print("removed", path)
