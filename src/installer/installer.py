@@ -15,9 +15,52 @@ from .detect import detect_host
 
 _CODEX_BEGIN = "# BEGIN dynamic-workflow"
 _CODEX_END = "# END dynamic-workflow"
+_CODEX_INLINE_MANAGED = "# dynamic-workflow managed fusion_flow"
 
 _HERMES_BEGIN = "  # BEGIN dynamic-workflow"
 _HERMES_END = "  # END dynamic-workflow"
+
+
+def _toml_key(value: str) -> str:
+    return value if re.fullmatch(r"[A-Za-z0-9_-]+", value) else json.dumps(value)
+
+
+def _toml_inline_value(value: object) -> str:
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_inline_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(
+            f"{_toml_key(str(key))} = {_toml_inline_value(item)}"
+            for key, item in value.items()
+        ) + " }"
+    raise ValueError(f"Unsupported TOML value in inline mcp_servers: {type(value).__name__}")
+
+
+def _codex_server_spec(runtime: str | Path, workspace: str | Path) -> dict[str, object]:
+    return {
+        "command": sys.executable,
+        "args": ["-m", "fusion_flow.mcp_server"],
+        "env": {
+            "PYTHONPATH": str(Path(runtime).resolve() / "src"),
+            "PSI_WORKFLOW_HOST": "codex",
+            "PSI_WORKFLOW_WORKSPACE": str(Path(workspace).resolve()),
+        },
+    }
+
+
+def _inline_mcp_servers_line(lines: list[str]) -> int | None:
+    for index, line in enumerate(lines):
+        if re.match(r"^\s*mcp_servers\s*=\s*\{", line):
+            return index
+    return None
 
 
 def configure_codex_mcp(
@@ -40,8 +83,25 @@ def configure_codex_mcp(
         servers = config_data.get("mcp_servers", {})
         if not isinstance(servers, dict):
             raise ValueError("mcp_servers must be a TOML table")
-        if "fusion_flow" in servers:
+
+        inline_index = _inline_mcp_servers_line(lines)
+        inline_is_managed = (
+            inline_index is not None and _CODEX_INLINE_MANAGED in lines[inline_index]
+        )
+        if "fusion_flow" in servers and not inline_is_managed:
             return path  # An existing user-owned server is authoritative.
+
+        if inline_index is not None:
+            updated_servers = dict(servers)
+            updated_servers["fusion_flow"] = _codex_server_spec(runtime, workspace)
+            lines[inline_index] = (
+                f"mcp_servers = {_toml_inline_value(updated_servers)}  {_CODEX_INLINE_MANAGED}"
+            )
+            result = "\n".join(lines).rstrip() + "\n"
+            tomllib.loads(result)
+            path.write_text(result, encoding="utf-8")
+            return path
+
         if lines and lines[-1].strip():
             lines.append("")
         start, end = len(lines), len(lines) - 1
