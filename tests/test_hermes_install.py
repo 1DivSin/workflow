@@ -33,6 +33,27 @@ class HermesInstallTests(unittest.TestCase):
                     configure_hermes_mcp(config, Path(raw)/'runtime', raw)
                     self.assertEqual(config.read_text(encoding='utf-8'), result)
 
+    def test_anchor_on_mcp_servers_mapping_is_preserved(self):
+        original = (
+            "mcp_servers: &servers\n"
+            "  other:\n"
+            "    command: other\n"
+            "mcp_defaults: *servers\n"
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / "config.yaml"
+            config.write_text(original, encoding="utf-8")
+            configure_hermes_mcp(config, Path(raw) / "runtime", raw)
+            result = config.read_text(encoding="utf-8")
+            parsed = yaml.safe_load(result)
+            self.assertIn("&servers", result)
+            self.assertEqual(parsed["mcp_servers"]["other"]["command"], "other")
+            self.assertEqual(
+                parsed["mcp_servers"]["fusion_flow"]["args"],
+                ["-m", "fusion_flow.mcp_server"],
+            )
+            self.assertEqual(parsed["mcp_defaults"], parsed["mcp_servers"])
+
     def test_invalid_config_is_unchanged(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw)/'config.yaml'
