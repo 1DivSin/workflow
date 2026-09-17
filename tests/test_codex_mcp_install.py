@@ -25,6 +25,37 @@ class CodexMcpInstallTests(unittest.TestCase):
                     self.assertEqual(tomllib.loads(result), tomllib.loads(original))
                     self.assertEqual(result, original)
 
+    def test_inline_mcp_servers_are_converted_before_managed_server_is_added(self):
+        originals = [
+            "mcp_servers = {}\n",
+            'mcp_servers = {other = {command = "other", args = ["--flag"]}}\n',
+        ]
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / "config.toml"
+            for original in originals:
+                with self.subTest(original=original):
+                    config.write_text(original, encoding="utf-8")
+                    before = tomllib.loads(original)
+                    configure_codex_mcp(config, Path(raw) / "runtime", Path(raw))
+                    result = config.read_text(encoding="utf-8")
+                    parsed = tomllib.loads(result)
+                    for name, server in before["mcp_servers"].items():
+                        self.assertEqual(parsed["mcp_servers"][name], server)
+                    self.assertEqual(
+                        parsed["mcp_servers"]["fusion_flow"]["args"],
+                        ["-m", "fusion_flow.mcp_server"],
+                    )
+                    configure_codex_mcp(
+                        config, Path(raw) / "new-runtime", Path(raw)
+                    )
+                    updated = config.read_text(encoding="utf-8")
+                    reparsed = tomllib.loads(updated)
+                    self.assertEqual(
+                        reparsed["mcp_servers"]["fusion_flow"]["env"]["PYTHONPATH"],
+                        str((Path(raw) / "new-runtime" / "src").resolve()),
+                    )
+                    self.assertEqual(updated.count("[mcp_servers.fusion_flow]"), 1)
+
     def test_invalid_config_and_incomplete_managed_block_are_not_written(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "config.toml"
