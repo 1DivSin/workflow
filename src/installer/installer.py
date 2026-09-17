@@ -99,10 +99,23 @@ def configure_hermes_mcp(
         insertion = len(lines)
     else:
         key, value = entries[0]
+        key_line = lines[key.start_mark.line]
+        suffix = key_line[key.end_mark.column :].lstrip()
+        if suffix.startswith(":"):
+            suffix = suffix[1:].lstrip()
+        if suffix.startswith("*"):
+            raise ValueError(
+                "mcp_servers YAML aliases cannot be extended safely; use a block mapping"
+            )
         if servers:
             if value.flow_style:
                 raise ValueError("Use block-style YAML for mcp_servers before adding a server")
-            insertion, indent = value.start_mark.line, value.start_mark.column
+            # MappingNode.start_mark points at an anchor on `mcp_servers: &name`.
+            # Insert before the first actual child instead so the managed server
+            # remains inside mcp_servers rather than before the mapping header.
+            first_key, _first_value = value.value[0]
+            insertion = first_key.start_mark.line
+            indent = first_key.start_mark.column
         else:
             # Turn an empty mapping or null into a block mapping, keeping comments.
             remaining = remaining[:value.start_mark.index] + remaining[value.end_mark.index:]
