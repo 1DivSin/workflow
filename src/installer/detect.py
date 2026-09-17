@@ -28,7 +28,7 @@ def _direct_host_executable(name: str, command_override: str) -> str | None:
     """Return the override executable only when it directly names the host binary.
 
     Command overrides may legitimately be wrappers such as ``uv run openclaw`` or
-    ``cmd /c openclaw``.  Their first token is not a host management executable
+    ``cmd /c openclaw``. Their first token is not a host management executable
     and must never be reused for commands such as ``plugins install``.
     """
     if not command_override:
@@ -91,6 +91,7 @@ def detect_host(
             skills_dir = Path(env.get("HERMES_SKILLS_DIR", str(host_home / "skills")))
 
         command_override = env.get(_COMMAND_OVERRIDES[name], "").strip()
+        command = _split_command(command_override) if command_override else ()
         executable = env.get(f"{name.upper()}_EXECUTABLE", "").strip() or None
         if executable is None:
             executable = _direct_host_executable(name, command_override)
@@ -104,6 +105,7 @@ def detect_host(
             "state_dir": str(Path(env.get("PSI_WORKFLOW_STATE_DIR", str(host_home / "state")))),
             "tools_dir": str(Path(env.get("PSI_WORKFLOW_TOOLS_DIR", str(host_home / "tools")))),
             "skills_dir": str(skills_dir),
+            "command": command,
             "executable": executable,
             "available": True,
         }
@@ -114,6 +116,7 @@ def detect_host(
         "state_dir": str(root_path / ".psi" / "state"),
         "tools_dir": str(root_path / ".psi" / "tools"),
         "skills_dir": str(root_path / ".psi" / "skills"),
+        "command": (),
         "executable": None,
         "available": False,
     }
