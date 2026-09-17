@@ -134,7 +134,16 @@ def run_host(args=(), default=".") -> subprocess.CompletedProcess[str] | None:
 def set_ai_socket_provider(provider): _ai_socket_provider.set(provider)
 def ai_socket(default_provider=None):
     provider = _ai_socket_provider.get()
-    return None if provider is None else provider()
+    if provider is not None:
+        return provider()
+    name = host_name()
+    if name in {"codex", "hermes"} and host_available():
+        # run_flow already has built-in Codex app-server and Hermes ACP paths.
+        # A non-None token only lets those direct adapters pass the legacy
+        # PSI socket/runtime presence gate; host-specific branches consume the
+        # actual native transports before this value could be used as a socket.
+        return f"direct-host://{name}"
+    return None
 def set_agent_factory(factory): _agent_factory.set(factory)
 def agent_handle(config, default_factory=None):
     factory = _agent_factory.get()
