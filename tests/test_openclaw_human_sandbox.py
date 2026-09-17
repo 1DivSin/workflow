@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import tempfile
@@ -21,7 +20,7 @@ class _FakeProcess:
 
 
 class OpenClawHumanSandboxTests(unittest.IsolatedAsyncioTestCase):
-    async def test_human_preparation_uses_exec_with_empty_tool_allowlist(self):
+    async def test_human_preparation_uses_exec_with_read_only_tool_policy(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             workspace = root / "workspace"
@@ -48,9 +47,10 @@ class OpenClawHumanSandboxTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(reply.ok)
             self.assertIn("exec", captured["args"])
             self.assertNotIn("--session-key", captured["args"])
-            self.assertEqual(captured["config"]["tools"], {"profile": "minimal", "allow": []})
+            self.assertEqual(captured["config"]["tools"], {"profile": "coding", "allow": ["read"]})
             self.assertEqual(captured["config"]["$include"], str(ambient.resolve()))
             self.assertIn(str(ambient.parent.resolve()), captured["env"]["OPENCLAW_INCLUDE_ROOTS"].split(os.pathsep))
+            self.assertEqual(captured["args"][captured["args"].index("--cwd") + 1], str(workspace))
 
     async def test_regular_agent_step_keeps_session_runtime(self):
         with tempfile.TemporaryDirectory() as raw:
