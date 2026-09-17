@@ -8,6 +8,8 @@ Prerequisites: uv and an installed host (Codex, Hermes, or OpenClaw).
 Authenticate the host with its normal setup before running model-backed workflows.
 For OpenClaw, use Node 26.1+ or 24.16+; the native integration is tested against 2026.9.4.
 Replace `/path/to/project` with an existing workspace (quote Windows paths).
+Keep the checkout and its uv environment: the registered server uses that interpreter.
+The base Python package intentionally does not install Hermes and its large dependency tree; only the Hermes setup enables the `hermes` extra.
 
 ### Recommended: install the runtime as a uv tool
 
@@ -25,8 +27,11 @@ interpreter that happened to run the installer.
 #### Codex
 
 ```sh
-dynamic-workflow install --host codex --workspace /path/to/project
-dynamic-workflow doctor --host codex --workspace /path/to/project
+git clone https://github.com/1DivSin/workflow.git workflow
+cd workflow
+uv sync --python 3.12 --extra hermes
+uv run dynamic-workflow installer . --host hermes --workspace /path/to/project
+uv run dynamic-workflow doctor --host hermes --workspace /path/to/project
 ```
 
 #### Hermes
