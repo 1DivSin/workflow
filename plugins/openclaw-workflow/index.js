@@ -7,6 +7,29 @@ const pluginRoot = path.dirname(fileURLToPath(import.meta.url));
 const string = { type: "string" };
 const parameters = (properties, required = []) => ({type: "object", properties, required, additionalProperties: false});
 
+export function decodeBridgeEnvelope(stdout) {
+  const raw = stdout.trim();
+  let envelope;
+  try {
+    envelope = JSON.parse(raw);
+  } catch {
+    throw new Error("Workflow bridge returned invalid JSON");
+  }
+  if (!envelope || typeof envelope !== "object" || typeof envelope.ok !== "boolean") {
+    throw new Error("Workflow bridge returned an invalid result envelope");
+  }
+  if (!envelope.ok) {
+    throw new Error(String(envelope.error || "Workflow bridge failed"));
+  }
+  const result = envelope.result;
+  const text = typeof result === "string" ? result : JSON.stringify(result);
+  let details = result;
+  if (typeof result === "string") {
+    try { details = JSON.parse(result); } catch { /* Plain-text tool result. */ }
+  }
+  return { content: [{ type: "text", text }], details };
+}
+
 function runWorkflow(name, params, workspace, config, signal) {
   const settingsPath = path.join(pluginRoot, "runtime.json");
   const installed = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf8")) : {};
@@ -21,8 +44,13 @@ function runWorkflow(name, params, workspace, config, signal) {
     "name = sys.argv[1]",
     "params = json.load(sys.stdin)",
     "fn = {'run_flow': run_flow, 'run_flow_resume': run_flow_resume, 'flow_manage': flow_manage}[name]",
-    "print(asyncio.run(fn(**params)))",
-  ].join("; ");
+    "try:",
+    "    result = asyncio.run(fn(**params))",
+    "except Exception as error:",
+    "    print(json.dumps({'ok': False, 'error': f'{type(error).__name__}: {error}'}, ensure_ascii=False))",
+    "else:",
+    "    print(json.dumps({'ok': True, 'result': result}, ensure_ascii=False))",
+  ].join("\n");
   return new Promise((resolve, reject) => {
     const child = spawn(python, ["-c", code, name], {
       cwd: workspace,
@@ -45,10 +73,11 @@ function runWorkflow(name, params, workspace, config, signal) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) return reject(new Error(stderr || `workflow exited with ${code}`));
-      let details = stdout.trim();
-      try { details = JSON.parse(details); } catch { /* flow_manage returns plain text. */ }
-      if (details && typeof details === "object" && details.error) return reject(new Error(String(details.error)));
-      resolve({ content: [{ type: "text", text: stdout.trim() }], details });
+      try {
+        resolve(decodeBridgeEnvelope(stdout));
+      } catch (error) {
+        reject(error);
+      }
     });
   });
 }
