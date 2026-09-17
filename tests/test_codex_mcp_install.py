@@ -25,6 +25,32 @@ class CodexMcpInstallTests(unittest.TestCase):
                     self.assertEqual(tomllib.loads(result), tomllib.loads(original))
                     self.assertEqual(result, original)
 
+    def test_inline_mcp_servers_can_receive_managed_server_and_update_it(self):
+        originals = [
+            "mcp_servers = {}\n",
+            'mcp_servers = {other = {command = "other", args = ["--flag"]}}\n',
+        ]
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / "config.toml"
+            for original in originals:
+                with self.subTest(original=original):
+                    config.write_text(original, encoding="utf-8")
+                    configure_codex_mcp(config, Path(raw) / "old", raw)
+                    first = config.read_text(encoding="utf-8")
+                    parsed = tomllib.loads(first)
+                    self.assertIn("fusion_flow", parsed["mcp_servers"])
+                    before = tomllib.loads(original)["mcp_servers"]
+                    for key, value in before.items():
+                        self.assertEqual(parsed["mcp_servers"][key], value)
+                    self.assertIn("# dynamic-workflow managed fusion_flow", first)
+
+                    configure_codex_mcp(config, Path(raw) / "new", raw)
+                    updated = tomllib.loads(config.read_text(encoding="utf-8"))
+                    self.assertEqual(
+                        updated["mcp_servers"]["fusion_flow"]["env"]["PYTHONPATH"],
+                        str((Path(raw) / "new" / "src").resolve()),
+                    )
+
     def test_invalid_config_and_incomplete_managed_block_are_not_written(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "config.toml"
