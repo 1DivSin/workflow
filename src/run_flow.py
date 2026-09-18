@@ -724,8 +724,7 @@ class _AgentSessionAdapter:
                     "For this validation test, the first response must use the JSON string value \"true\"."
                 )
                 outputs: dict[str, object] | None = None
-                last_error: ValueError | None = None
-                for attempt in range(2):
+                            for attempt in range(2):
                     client = CodexAppServerClient(
                         command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
                         cwd=str(_workspace_dir()),
@@ -776,8 +775,7 @@ class _AgentSessionAdapter:
                         outputs = candidate
                         break
                     except ValueError as error:
-                        last_error = error
-                        if attempt == 1:
+                                    if attempt == 1:
                             raise ValueError(f"step {context.step_id!r} result remained invalid after 2 attempts") from error
                         codex_prompt = (
                             f"Original instruction:\n{invocation.prompt}\n\n"
@@ -2283,8 +2281,8 @@ async def _complete_host_program_step(
         '{"runtime":"<interpreter executable>"} with no Markdown or prose. runtime is one executable '
         "only: no flags, inline code, script path, or Program arguments. Use an empty runtime only "
         "when the declared file itself is already directly executable. If the Program requires "
-        "compilation, return exactly {"error":"compiled Program requires structured "
-        "compile_program support on this host"} rather than compiling or running it yourself.\n"
+        'compilation, return exactly {"error":"compiled Program requires structured '
+        'compile_program support on this host"} rather than compiling or running it yourself.\n'
         "Execution contract:\n"
         + encoded_contract
     )
