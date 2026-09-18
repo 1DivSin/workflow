@@ -112,8 +112,8 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"result": f"ready{os.linesep}"})
         self.assertEqual(len(host.prompts), 1)
         contract_prompt = host.prompts[0]
-        self.assertIn('"script_path"', contract_prompt)
-        self.assertIn(str(script), contract_prompt)
+        contract = json.loads(contract_prompt.split("Execution contract:\n", 1)[1])
+        self.assertEqual(contract["script_path"], str(script))
         self.assertIn("install a missing interpreter or dependency", contract_prompt)
 
     async def test_invalid_program_agent_response_never_falls_back_to_direct_execution(self):
