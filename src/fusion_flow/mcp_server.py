@@ -133,7 +133,18 @@ async def serve_stdio() -> None:
     for line in sys.stdin:
         if not line.strip():
             continue
-        response = await dispatch(json.loads(line))
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError as error:
+            response = _error(None, -32700, f"Invalid JSON: {error.msg}")
+        else:
+            if not isinstance(request, dict):
+                response = _error(None, -32600, "JSON-RPC request must be an object")
+            else:
+                try:
+                    response = await dispatch(request)
+                except Exception as error:
+                    response = _error(request.get("id"), -32603, f"Internal error: {type(error).__name__}: {error}")
         if response is None:
             continue
         sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")

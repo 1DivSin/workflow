@@ -13,7 +13,15 @@ def _config_path() -> Path:
 def load_providers(path: str|Path|None=None) -> dict[str, Provider]:
     p=Path(path).expanduser() if path else _config_path()
     if not p.exists(): return {}
-    raw=json.loads(p.read_text(encoding='utf-8')); urls=raw.get('baseURLs',{}); keys=raw.get('apiKeys',{}); models=raw.get('models',{}); out={}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    urls=raw.get('baseURLs',{}); keys=raw.get('apiKeys',{}); models=raw.get('models',{}); out={}
+    if not all(isinstance(value, dict) for value in (urls, keys, models)):
+        return {}
     for role, model in models.items():
         if not isinstance(model,str) or not model: continue
         route=model.split(':',1)[0] if ':' in model else 'default'; key=keys.get(route,keys.get('default','OPENAI_API_KEY'))

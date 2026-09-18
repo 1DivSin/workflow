@@ -33,7 +33,10 @@ class HermesACPClient:
             for line in env_file.read_text().splitlines():
                 if line.strip() and not line.lstrip().startswith("#") and "=" in line:
                     k, v = line.split("=", 1); env.setdefault(k.strip(), v.strip().strip("\""))
-        self.proc = await create_subprocess_exec(*self.command, cwd=self.cwd, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            self.proc = await create_subprocess_exec(*self.command, cwd=self.cwd, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        except OSError as error:
+            raise RuntimeError(f"Hermes ACP could not start: {error}") from error
         await self.request("initialize", {"protocolVersion": 1, "clientInfo": {"name": "fusion-flow", "version": "0.1"}})
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
