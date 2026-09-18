@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 import run_flow as runtime
+from fusion_flow.adapters.codex_app_server import CodexAppServerClient
 from fusion_flow.adapters.openclaw_cli import OpenClawCliRuntime
 from fusion_flow.agent_runtime import AgentInvocation, AgentReply
 from fusion_flow.workflow_runner import ProgramInvocation
@@ -40,6 +42,74 @@ class _NestedResultProcess:
 
 
 class ChecklistRuntimeRepairTests(unittest.IsolatedAsyncioTestCase):
+    def test_codex_nested_app_server_disables_workflow_mcps(self):
+        self.assertEqual(
+            runtime._isolated_codex_app_server_command(
+                ("codex", "app-server", "--stdio"),
+                ("fusion_flow", "workflow_codex"),
+            ),
+            (
+                "codex",
+                "--config",
+                "mcp_servers.fusion_flow.enabled=false",
+                "--config",
+                "mcp_servers.workflow_codex.enabled=false",
+                "app-server",
+                "--stdio",
+            ),
+        )
+
+    def test_codex_nested_app_server_only_disables_configured_workflow_mcps(self):
+        with tempfile.TemporaryDirectory() as raw:
+            codex_home = Path(raw) / ".codex"
+            codex_home.mkdir()
+            (codex_home / "config.toml").write_text(
+                '[mcp_servers.fusion_flow]\ncommand = "dynamic-workflow-mcp"\n'
+                '[mcp_servers.other]\ncommand = "other"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(codex_home), "PSI_WORKFLOW_WORKSPACE": raw},
+                clear=False,
+            ):
+                self.assertEqual(runtime._configured_codex_workflow_mcps(), ("fusion_flow",))
+
+    def test_codex_runtime_has_no_q08_specific_prompt_or_log_path(self):
+        source = (Path(__file__).parents[1] / "src" / "run_flow.py").read_text(encoding="utf-8")
+        self.assertNotIn("For this validation test", source)
+        self.assertNotIn('/ "flows" / "q08" / "runs"', source)
+        self.assertIn("codex_prompt = _agent_step_prompt(invocation.prompt, context)", source)
+
+    async def test_codex_event_log_creates_parent_directory(self):
+        class _Stdin:
+            def write(self, _data):
+                pass
+
+            async def drain(self):
+                pass
+
+        class _Stdout:
+            def __init__(self):
+                self.lines = [
+                    b'{"method":"item/agentMessage/delta","params":{"delta":"ok"}}\n',
+                    b'{"method":"turn/completed","params":{}}\n',
+                ]
+
+            async def readline(self):
+                return self.lines.pop(0) if self.lines else b""
+
+        with tempfile.TemporaryDirectory() as raw:
+            log_path = Path(raw) / "missing" / "nested" / "events.jsonl"
+            client = CodexAppServerClient(env={"CODEX_EVENT_LOG": str(log_path)})
+            client.proc = SimpleNamespace(stdin=_Stdin(), stdout=_Stdout())
+            client.request = AsyncMock(return_value={"thread": {"id": "thread"}})
+
+            events = [event async for event in client.prompt(".", "validate")]
+
+            self.assertEqual([event.method for event in events], ["item/agentMessage/delta", "turn/completed"])
+            self.assertTrue(log_path.is_file())
+
     async def test_direct_agent_runtime_repairs_terminal_output_once(self):
         host = _SequenceRuntime(
             [
