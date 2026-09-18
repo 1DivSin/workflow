@@ -33,7 +33,7 @@ from fusion_flow.adapters.psi_runtime import (
 
 _TOOLS_DIR = Path(__file__).parent
 _AGENT_DIR = _TOOLS_DIR.parent.parent if _TOOLS_DIR.parent.name == "tools" else _TOOLS_DIR.parent
-_WORKSPACE_DIR = Path(os.getenv("PSI_WORKFLOW_WORKSPACE", str(_AGENT_DIR)))
+_WORKSPACE_DIR = Path(os.getenv("PSI_WORKFLOW_WORKSPACE", str(_AGENT_DIR))).expanduser().resolve()
 _SKILL_DIR = (_AGENT_DIR / "skills" / "workflow") if (_AGENT_DIR / "skills" / "workflow").exists() else _TOOLS_DIR
 for _import_dir in (_TOOLS_DIR, _SKILL_DIR):
     if str(_import_dir) not in sys.path:
@@ -94,6 +94,7 @@ from fusion_flow.host_adapter import (
     state_dir as _host_state_dir,
     tools_dir as _host_tools_dir,
     workspace_dir as _host_workspace_dir,
+    _split_command as _split_host_command,
     ai_socket as _host_ai_socket,
 )
 
@@ -727,7 +728,7 @@ class _AgentSessionAdapter:
                 last_error: ValueError | None = None
                 for attempt in range(2):
                     client = CodexAppServerClient(
-                        command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
+                        command=_split_host_command(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio")),
                         cwd=str(_workspace_dir()),
                         env={**os.environ, "CODEX_EVENT_LOG": str(
                             _workspace_dir() / "flows" / "q08" / "runs" / f"codex-events-{os.getpid()}-{attempt}.jsonl"
@@ -798,7 +799,7 @@ class _AgentSessionAdapter:
                 outputs: dict[str, object] | None = None
                 last_error: ValueError | None = None
                 client = HermesACPClient(
-                    command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
+                    command=_split_host_command(os.getenv("HERMES_ACP_COMMAND", "hermes-acp")),
                     cwd=str(_workspace_dir()),
                 )
                 await client.start()
@@ -2123,7 +2124,7 @@ async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[s
     )
     return _program_result_outputs(invocation, [result])
     contract = {"script_path": str(script), "cwd": str(cwd), "stdin_utf8": invocation.stdin, "logical_argv": list(invocation.argv), "output_artifact_ids": list(invocation.output_ids), "terminal": invocation.terminal, "instruction": invocation.instruction}
-    client = HermesACPClient(command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()), cwd=str(workspace))
+    client = HermesACPClient(command=_split_host_command(os.getenv("HERMES_ACP_COMMAND", "hermes-acp")), cwd=str(workspace))
     await client.start()
     session_id = await client.new_session(str(workspace))
     chunks: list[str] = []
@@ -3129,7 +3130,7 @@ async def _prepare_human_step(
 
     if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex":
         client = CodexAppServerClient(
-            command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
+            command=_split_host_command(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio")),
             cwd=str(_workspace_dir()),
         )
         await client.start()
@@ -3167,7 +3168,7 @@ async def _prepare_human_step(
 
     if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
         client = HermesACPClient(
-            command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
+            command=_split_host_command(os.getenv("HERMES_ACP_COMMAND", "hermes-acp")),
             cwd=str(_workspace_dir()),
         )
         await client.start()

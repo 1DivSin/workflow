@@ -6,6 +6,11 @@ def test_windows_shim_with_spaces_is_wrapped_with_comspec(monkeypatch):
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
     assert process._spawn_argv((r"C:\Program Files\npm\openclaw.cmd", "gateway", "--port", "18789")) == (r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c", r'"C:\Program Files\npm\openclaw.cmd" gateway --port 18789')
 
+def test_empty_comspec_falls_back_to_cmd(monkeypatch):
+    monkeypatch.setattr(process.sys, "platform", "win32")
+    monkeypatch.setenv("COMSPEC", "")
+    assert process._spawn_argv((r"C:\npm\openclaw.cmd", "--version"))[:3] == ("cmd.exe", "/d", "/s")
+
 def test_non_windows_commands_are_unchanged(monkeypatch):
     monkeypatch.setattr(process.sys, "platform", "linux")
     command = ("openclaw", "gateway")
