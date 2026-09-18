@@ -794,8 +794,7 @@ class _AgentSessionAdapter:
                     raise ValueError("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT must be numeric") from error
                 hermes_prompt = invocation.prompt
                 outputs: dict[str, object] | None = None
-                last_error: ValueError | None = None
-                client = HermesACPClient(
+                            client = HermesACPClient(
                     command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
                     cwd=str(_workspace_dir()),
                 )
@@ -841,8 +840,7 @@ class _AgentSessionAdapter:
                                 ).warning("Hermes Agent Step accepted repaired output")
                             break
                         except ValueError as error:
-                            last_error = error
-                            if attempt == 1:
+                                            if attempt == 1:
                                 raise ValueError(
                                     f"step {context.step_id!r} result remained invalid after 2 attempts"
                                 ) from error
