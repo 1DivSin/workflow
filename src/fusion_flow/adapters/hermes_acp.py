@@ -46,14 +46,17 @@ class HermesACPClient:
                 if line.strip() and not line.lstrip().startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     env.setdefault(k.strip(), v.strip().strip('"'))
-        self.proc = await create_subprocess_exec(
-            *self.command,
-            cwd=self.cwd,
-            env=env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            self.proc = await create_subprocess_exec(
+                *self.command,
+                cwd=self.cwd,
+                env=env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as error:
+            raise RuntimeError(f"Hermes ACP could not start: {error}") from error
         self._stderr_task = asyncio.create_task(drain_stream(self.proc.stderr))
         try:
             await self.request(
