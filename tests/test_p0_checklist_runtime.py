@@ -47,7 +47,7 @@ class P0SelfContainedRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(ExecutionPlanError, "nested Workflow launcher"):
             await adapter.complete(
-                "call run_flow to start a child workflow and read README.md",
+                "调用 run_flow 再启动一个子 workflow，并在子 workflow 中读取 README.md",
                 context,
             )
 
