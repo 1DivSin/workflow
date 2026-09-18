@@ -300,6 +300,8 @@ class P0HumanCheckpointRuntimeTests(unittest.TestCase):
             os.environ,
             PYTHONPATH=str(ROOT / "src"),
             PYTHONDONTWRITEBYTECODE="1",
+            PYTHONUTF8="1",
+            PYTHONIOENCODING="utf-8",
             PSI_WORKFLOW_HOST="hermes",
             HERMES_EXECUTABLE=sys.executable,
             PSI_WORKFLOW_WORKSPACE=str(root),
