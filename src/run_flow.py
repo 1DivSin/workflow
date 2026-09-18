@@ -2058,6 +2058,24 @@ def _program_executable_name(value: str) -> str:
     return Path(value).name.lower()
 
 
+def _program_argv_key(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """Canonicalize absolute argv paths for compiled-launch identity checks."""
+
+    if os.name != "nt":
+        return argv
+    normalized: list[str] = []
+    for value in argv:
+        path = Path(value)
+        if path.is_absolute():
+            try:
+                normalized.append(str(path.resolve(strict=False)))
+                continue
+            except OSError:
+                pass
+        normalized.append(value)
+    return tuple(normalized)
+
+
 async def _program_file_sha256(path: Path) -> str:
     return hashlib.sha256(await anyio.Path(path).read_bytes()).hexdigest()
 
@@ -2292,7 +2310,7 @@ async def _complete_program_step(
             or any(not isinstance(argument, str) or not argument for argument in (*compiler_command, *launch_command))
         ):
             error = "compile_argv and execute_argv must contain non-empty string arguments."
-        elif compiler_command.count(str(script)) != 1:
+        elif _program_argv_key(compiler_command).count(_program_argv_key((str(script),))[0]) != 1:
             error = "compile_argv must contain the exact declared script_path once."
         elif not artifact_paths:
             error = "compile_program requires at least one artifact_path."
@@ -2309,8 +2327,12 @@ async def _complete_program_step(
                     break
                 artifacts.append(resolved)
             registered_command = (*launch_command, *logical_args)
+            registered_key = _program_argv_key(registered_command)
             if not error and not any(
-                str(artifact) in registered_command or str(artifact.parent) in registered_command
+                any(
+                    candidate in registered_key
+                    for candidate in _program_argv_key((str(artifact), str(artifact.parent)))
+                )
                 for artifact in artifacts
             ):
                 error = "execute_argv must reference a registered artifact or its containing directory."
@@ -2366,7 +2388,7 @@ async def _complete_program_step(
                     artifact_digests_list.append((artifact, await _program_file_sha256(artifact)))
                 artifact_digests = tuple(artifact_digests_list)
                 registered_command = (*launch_command, *logical_args)
-                registered_launches[registered_command] = _RegisteredProgramLaunch(
+                registered_launches[_program_argv_key(registered_command)] = _RegisteredProgramLaunch(
                     compile_argv=compiler_command,
                     execute_argv=registered_command,
                     source_sha256=source_digest,
