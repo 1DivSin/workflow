@@ -1,0 +1,129 @@
+name: P0 psi-agent checklist validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  psi-agent-p0:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout psi-agent checklist snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: genuineknowledge/psi-agent
+          ref: 3362771961f8675a91f2ded897e708c716a43a5a
+          fetch-depth: 0
+          path: psi-agent
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python 3.14
+        run: uv python install 3.14
+
+      - name: Q17 fixed commit history exists
+        shell: pwsh
+        run: |
+          $shas = @(
+            "3281232479ce4f221ce2e8aa85b31e1876dd160e",
+            "1b1b8ada2a7aac5e85c26316201d0d9a4c4465b1",
+            "662e1b3cb9b27456ee80538403b39b471c10649d",
+            "ea53f35b90769221a31c8a1fee52cf5e1c947521",
+            "a8aed4584c16160338e23f45101a6e3601a7554a",
+            "bf12548e76eef5ce5276798407f035c221451a4c",
+            "71f0ae47de3112a8a585926ba4ee054e22ccee26",
+            "30e0f28a8c41d46177e36d2d7d99f119a9b2b9ae"
+          )
+          foreach ($sha in $shas) {
+            git -C psi-agent cat-file -e "$sha^{commit}"
+            if ($LASTEXITCODE -ne 0) { throw "Q17 missing commit $sha" }
+            git -C psi-agent show --format=fuller --stat --name-status --no-renames $sha | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Q17 git show failed for $sha" }
+          }
+
+      - name: Q18 detect stale SHA and verify intended commit
+        shell: pwsh
+        run: |
+          $bad = "888b1b9403af289d0ca76678ed71364971fcf82859"
+          git -C psi-agent cat-file -e "$bad^{commit}" 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Q18 checklist SHA unexpectedly exists; re-evaluate test data" }
+          $good = "888b1b1f8ece331a667952c7cf5bffdf5c3ab47f"
+          git -C psi-agent cat-file -e "$good^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw "Q18 intended lock-boundary commit missing: $good" }
+          git -C psi-agent show --format=fuller --stat --name-status $good | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Q18 intended commit cannot be shown" }
+          Write-Host "Q18_BLOCKED_CHECKLIST_SHA=$bad"
+          Write-Host "Q18_INTENDED_SHA=$good"
+
+      - name: Q30 fixed Gateway commits exist
+        shell: pwsh
+        run: |
+          $shas = @(
+            "5b62df87ea67d6c95f9d83018947ca12712f8140",
+            "a8aed4584c16160338e23f45101a6e3601a7554a",
+            "f3fd0e49828340df6997e5edd56fac10256d9e57",
+            "803705c7c3e7bad77a558f4b8cec684dcd8e2153",
+            "30e0f28a8c41d46177e36d2d7d99f119a9b2b9ae",
+            "db2a77cd5a79a4446a3eaaa0aa762de865ca8772"
+          )
+          foreach ($sha in $shas) {
+            git -C psi-agent cat-file -e "$sha^{commit}"
+            if ($LASTEXITCODE -ne 0) { throw "Q30 missing commit $sha" }
+            git -C psi-agent show --format=fuller --stat --name-status $sha | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Q30 git show failed for $sha" }
+          }
+
+      - name: Q32 Q33 historical diff and snapshot mirror hash
+        shell: pwsh
+        run: |
+          $base = "30e0f28a8c41d46177e36d2d7d99f119a9b2b9ae"
+          $head = "52845dd1619f2de3bdc64d0b642a40cb255e0adc"
+          $paths = @(
+            "agents/desktop/tools/run_flow.py",
+            "agents/feishu/tools/run_flow.py"
+          )
+          git -C psi-agent diff --stat "$base..$head" -- $paths
+          if ($LASTEXITCODE -ne 0) { throw "Q32 stat diff failed" }
+          git -C psi-agent diff --numstat "$base..$head" -- $paths
+          if ($LASTEXITCODE -ne 0) { throw "Q32 numstat failed" }
+          $desktop = (Get-FileHash "psi-agent/agents/desktop/tools/run_flow.py" -Algorithm SHA256).Hash
+          $feishu = (Get-FileHash "psi-agent/agents/feishu/tools/run_flow.py" -Algorithm SHA256).Hash
+          Write-Host "desktop_sha256=$desktop"
+          Write-Host "feishu_sha256=$feishu"
+          if ($desktop -ne $feishu) { throw "Q32/Q33 snapshot mirrors differ" }
+
+      - name: Prepare psi-agent environment for Q21
+        working-directory: psi-agent
+        run: uv sync --frozen --no-dev
+
+      - name: Q21 compileall
+        working-directory: psi-agent
+        shell: pwsh
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          uv run --no-sync python -m compileall -q src/psi_agent
+          if ($LASTEXITCODE -ne 0) { throw "Q21 compileall failed with $LASTEXITCODE" }
+
+      - name: Q21 CLI help
+        working-directory: psi-agent
+        shell: pwsh
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          uv run --no-sync psi-agent --help
+          if ($LASTEXITCODE -ne 0) { throw "Q21 CLI help failed with $LASTEXITCODE" }
+
+      - name: Q36 psi-agent large patch evidence
+        shell: pwsh
+        run: |
+          $sha = "eca1ea31d26117b293457d168ffc8693b545b306"
+          $out = Join-Path $env:RUNNER_TEMP "q36-psi.patch"
+          git -C psi-agent show --format=fuller --patch $sha | Out-File -FilePath $out -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "Q36 psi-agent git show failed" }
+          $bytes = (Get-Item $out).Length
+          Write-Host "Q36_PSI_PATCH_BYTES=$bytes"
+          if ($bytes -le 0) { throw "Q36 psi-agent patch was empty" }
