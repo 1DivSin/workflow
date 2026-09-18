@@ -175,7 +175,11 @@ export HERMES_ACP_COMMAND="/path/to/hermes-acp"
 export PSI_WORKFLOW_HERMES_SESSION_TIMEOUT=90
 ~~~
 
-Hermes Program steps first run a specialized Program Agent to inspect and prepare the interpreter and dependencies; the host then builds the authoritative interpreter argv and captures the process result. The standalone host adapter fails closed for compiled Programs until structured `compile_program` bridging is available. Agent TerminalStep and Human preparation responses are parsed against their strict JSON contracts, with bounded repair for invalid Agent output.
+Program Step uses the same Agent-backed contract on Codex, Hermes, OpenClaw, and the native psi runtime. The Agent receives the declared script contract plus `compile_program`, `execute_program`, `submit_program_result`, and workspace-preparation tools through a bounded JSON tool loop.
+
+For an interpreted Program, the Agent requests `execute_program(runtime=...)`; the host appends the declared script and immutable logical arguments, captures the real process result, and returns it to the Agent. For a compiled Program, the Agent first requests `compile_program` with the exact source, compiler argv, launch argv, and workspace-local artifacts. The host runs the compiler, records source/artifact hashes, then permits `execute_program(compiled_launch_argv=...)` only after revalidation. The Agent must submit the captured result once; it cannot author Artifact values directly.
+
+Agent preparation may inspect the workspace and install a missing runtime or dependency. Source paths, stdin, output capture, process cleanup, and fidelity checks remain runtime responsibilities. TerminalStep and Human preparation responses continue to use strict JSON contracts with bounded repair for invalid Agent output.
 
 ### Diagnostics
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import inspect
 import json
 import locale
 import marshal
@@ -85,7 +86,7 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
-from fusion_flow.adapters import HermesACPClient, CodexAppServerClient, OpenClawGatewayClient
+from fusion_flow.adapters import HermesACPClient, CodexAppServerClient
 from fusion_flow.agent_runtime import AgentInvocation, AgentRuntime
 from fusion_flow.host_adapter import (
     agent_runtime as _host_agent_runtime,
@@ -592,7 +593,7 @@ class _AgentSessionAdapter:
 
         launcher_request = (
             ("call run_flow" in prompt or "call run_flow_resume" in prompt or "call flow_run" in prompt)
-            and ("child workflow" in prompt or "nested workflow" in prompt or "子 workflow" in prompt)
+            and ("child workflow" in prompt or "nested workflow" in prompt or "瀛?workflow" in prompt)
         )
         if launcher_request:
             raise ExecutionPlanError(
@@ -2114,30 +2115,6 @@ async def _registered_launch_violation(
 
 
 
-def _parse_host_program_preparation(value: str) -> str:
-    """Parse the narrow host Program-Agent preparation response."""
-
-    try:
-        payload = json.loads(value)
-    except json.JSONDecodeError as error:
-        raise ValueError("Program preparer must return one JSON object") from error
-    if not isinstance(payload, dict):
-        raise ValueError("Program preparer response must be a JSON object")
-    if set(payload) == {"error"}:
-        message = payload["error"]
-        if not isinstance(message, str) or not message.strip():
-            raise ValueError("Program preparer error must be a non-empty string")
-        raise ExecutionPlanError(f"Program preparation failed: {message.strip()}")
-    if set(payload) != {"runtime"}:
-        raise ValueError("Program preparer response must contain exactly the runtime key")
-    runtime = payload["runtime"]
-    if not isinstance(runtime, str):
-        raise ValueError("Program preparer runtime must be a string")
-    if any(character in runtime for character in ("\x00", "\r", "\n")):
-        raise ValueError("Program preparer runtime must be one executable without control characters")
-    return runtime.strip()
-
-
 async def _host_program_agent_response(
     prompt: str,
     *,
@@ -2145,15 +2122,17 @@ async def _host_program_agent_response(
     session_id: str,
     agent_runtime: AgentRuntime | None,
 ) -> str:
-    """Run one preparation turn through the selected host Agent."""
+    """Run one host Agent turn used by the structured Program tool loop."""
 
     if agent_runtime is not None:
+        if not agent_runtime.supports_agent_steps():
+            raise ExecutionPlanError("Host Agent runtime does not support Agent-backed Program steps")
         reply = await agent_runtime.run_agent(
             AgentInvocation(prompt, session_id, workspace)
         )
         if not reply.ok:
             raise ExecutionPlanError(
-                f"Program preparation Agent failed: {reply.error or reply.status}"
+                f"Program Agent failed: {reply.error or reply.status}"
             )
         return reply.text
 
@@ -2161,10 +2140,7 @@ async def _host_program_agent_response(
     if host_name == "codex":
         client = CodexAppServerClient(
             command=tuple(
-                os.getenv(
-                    "CODEX_APP_SERVER_COMMAND",
-                    "codex app-server --stdio",
-                ).split()
+                os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()
             ),
             cwd=str(workspace),
         )
@@ -2185,21 +2161,17 @@ async def _host_program_agent_response(
         try:
             timeout_seconds = float(timeout_value)
         except ValueError as error:
-            raise ValueError(
-                "PSI_WORKFLOW_HERMES_SESSION_TIMEOUT must be numeric"
-            ) from error
+            raise ValueError("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT must be numeric") from error
         client = HermesACPClient(
-            command=tuple(
-                os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()
-            ),
+            command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
             cwd=str(workspace),
         )
         await client.start()
-        hermes_session_id = await client.new_session(str(workspace))
+        session_id = await client.new_session(str(workspace))
         chunks: list[str] = []
         try:
             with anyio.fail_after(timeout_seconds):
-                async for event in client.prompt(hermes_session_id, prompt):
+                async for event in client.prompt(session_id, prompt):
                     update = event.params.get("update", event.params)
                     content = update.get("content") if isinstance(update, dict) else None
                     if isinstance(content, str):
@@ -2217,147 +2189,62 @@ async def _host_program_agent_response(
         return "".join(chunks).strip()
 
     raise ExecutionPlanError(
-        "Program Step requires a host Agent runtime capable of preparing the Program environment"
+        "Program Step requires a host Agent runtime capable of structured tool calls"
     )
 
 
-async def _complete_host_program_step(
-    invocation: ProgramInvocation,
+def _parse_host_program_tool_call(value: str) -> tuple[str, dict[str, object]]:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError("Program Agent must return one JSON tool call") from error
+    if not isinstance(payload, dict) or set(payload) != {"tool", "arguments"}:
+        raise ValueError("Program Agent tool call must contain exactly tool and arguments")
+    name = payload["tool"]
+    arguments = payload["arguments"]
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Program Agent tool name must be a non-empty string")
+    if not isinstance(arguments, dict):
+        raise ValueError("Program Agent tool arguments must be a JSON object")
+    return name, arguments
+
+
+async def _run_host_program_tool_loop(
+    initial_prompt: str,
     *,
-    workspace: Path,
-    cwd: Path,
-    script: Path,
-    source_digest: str,
-    agent_runtime: AgentRuntime | None,
-) -> dict[str, object]:
-    """Let a host Agent prepare an interpreted Program, then execute it exactly once."""
-
-    contract = {
-        "contract_version": 1,
-        "workspace_root": str(workspace),
-        "step_id": invocation.binding_name,
-        "executor_id": invocation.name,
-        "script_path": str(script),
-        "script_sha256": source_digest,
-        "logical_argv": list(invocation.argv),
-        "cwd": str(cwd),
-        "stdin_utf8": invocation.stdin,
-        "step_instruction": invocation.instruction,
-        "input_artifacts": dict(invocation.inputs),
-        "output_artifact_ids": list(invocation.output_ids),
-        "output_mode": _program_output_mode(
-            invocation.output_ids,
-            terminal=invocation.terminal,
-        ),
-    }
-    try:
-        encoded_contract = json.dumps(
-            contract,
-            ensure_ascii=False,
-            sort_keys=True,
-            allow_nan=False,
-        )
-    except (TypeError, ValueError) as error:
-        return _program_error_outputs(
-            invocation,
-            phase="input_format",
-            kind="non_json_input",
-            message="Program input artifacts must contain finite JSON values.",
-            attempts=[
-                _ProgramProcessResult(
-                    argv=invocation.argv,
-                    exit_code=None,
-                    stdout=b"",
-                    stderr=b"",
-                    error=str(error),
-                )
-            ],
-        )
-
-    guidance = (
-        "You prepare exactly one FusionFlow Program step for host-controlled execution. "
-        "Treat the JSON contract literally. You may inspect the workspace and use the host's "
-        "environment tools to install a missing interpreter or dependency. Do not execute, edit, "
-        "overwrite, chmod, rename, or replace the declared script, and do not change stdin or input "
-        "artifacts. For an interpreted Program, return exactly one JSON object of the form "
-        '{"runtime":"<interpreter executable>"} with no Markdown or prose. runtime is one executable '
-        "only: no flags, inline code, script path, or Program arguments. Use an empty runtime only "
-        "when the declared file itself is already directly executable. If the Program requires "
-        'compilation, return exactly {"error":"compiled Program requires structured '
-        'compile_program support on this host"} rather than compiling or running it yourself.\n'
-        "Execution contract:\n"
-        + encoded_contract
-    )
-    session_id = f"program-{invocation.binding_name}-{new_opaque_id()}"
-    message = guidance
-    runtime = ""
-    for attempt in range(2):
-        response = await _host_program_agent_response(
-            message,
-            workspace=workspace,
-            session_id=session_id,
-            agent_runtime=agent_runtime,
-        )
+    funcs: Mapping[str, Callable[..., Any]],
+    agent_response: Callable[[str], Awaitable[str]],
+    is_submitted: Callable[[], bool],
+    max_turns: int = _STEP_MAX_TURNS,
+) -> None:
+    message = initial_prompt
+    allowed = ", ".join(sorted(funcs))
+    for _ in range(max_turns):
+        raw = await agent_response(message)
         try:
-            runtime = _parse_host_program_preparation(response)
-            break
+            name, arguments = _parse_host_program_tool_call(raw)
         except ValueError as error:
-            if attempt == 1:
-                return _program_error_outputs(
-                    invocation,
-                    phase="agent",
-                    kind="invalid_runtime_selection",
-                    message=str(error),
-                    attempts=[],
-                )
-            message = (
-                guidance
-                + "\n\nYour previous preparation response failed validation: "
+            message += (
+                "\n\nPrevious response was invalid: "
                 + str(error)
-                + '. Return only {"runtime":"<interpreter executable>"} or a single {"error":"..."} object.'
+                + f". Return one JSON tool call using only: {allowed}."
             )
-    else:
-        raise AssertionError("unreachable")
-
-    if await _program_file_sha256(script) != source_digest:
-        return _program_error_outputs(
-            invocation,
-            phase="agent",
-            kind="script_changed",
-            message="The Program preparer changed the declared script.",
-            attempts=[],
-        )
-
-    command, provenance_error = await _build_interpreted_program_argv(
-        runtime,
-        cwd=cwd,
-        script=script,
-        logical_args=invocation.argv[1:],
-    )
-    if provenance_error:
-        return _program_error_outputs(
-            invocation,
-            phase="agent",
-            kind="invalid_runtime_selection",
-            message=provenance_error,
-            attempts=[],
-        )
-
-    try:
-        result = await _execute_program_command(
-            invocation,
-            command,
-            stdin=invocation.stdin or "",
-        )
-    except Exception as error:
-        result = _ProgramProcessResult(
-            argv=command,
-            exit_code=None,
-            stdout=b"",
-            stderr=b"",
-            error=str(error).strip() or type(error).__name__,
-        )
-    return _program_result_outputs(invocation, [result])
+            continue
+        function = funcs.get(name)
+        if function is None:
+            message += f"\nTool error: unknown Program tool {name!r}. Allowed tools: {allowed}."
+            continue
+        try:
+            result = function(**arguments)
+            if inspect.isawaitable(result):
+                result = await result
+            encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception as error:
+            encoded = json.dumps({"error": f"{type(error).__name__}: {error}"}, ensure_ascii=False)
+        message += f"\n\nTool result for {name}:\n{encoded}\nReturn the next JSON tool call only."
+        if name == "submit_program_result" and is_submitted():
+            return
+    raise ExecutionPlanError("Program Agent exceeded the maximum tool-call rounds without submitting a result")
 
 
 async def _complete_program_step(
@@ -2374,15 +2261,6 @@ async def _complete_program_step(
     repair_authorized = _program_repair_authorized(invocation.instruction)
     source_digest = hashlib.sha256(await anyio.Path(script).read_bytes()).hexdigest()
     host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
-    if agent_runtime is not None or host_name in {"codex", "hermes", "openclaw"}:
-        return await _complete_host_program_step(
-            invocation,
-            workspace=workspace,
-            cwd=cwd,
-            script=script,
-            source_digest=source_digest,
-            agent_runtime=agent_runtime,
-        )
     attempts: list[_ProgramProcessResult] = []
     registered_launches: dict[tuple[str, ...], _RegisteredProgramLaunch] = {}
     submitted: dict[str, object] | None = None
@@ -2624,8 +2502,10 @@ async def _complete_program_step(
         submitted = _program_result_outputs(invocation, attempts)
         return "Program result accepted."
 
-    tools = {name: metadata for name, metadata in tool_registry.tools.items() if name in _PROGRAM_AGENT_TOOLS}
-    funcs = {name: func for name in tools if (func := tool_registry.get(name)) is not None}
+    available_tools = getattr(tool_registry, "tools", {})
+    get_tool = getattr(tool_registry, "get", lambda _name: None)
+    tools = {name: metadata for name, metadata in available_tools.items() if name in _PROGRAM_AGENT_TOOLS}
+    funcs = {name: func for name in tools if (func := get_tool(name)) is not None}
     source_powershell = funcs.get("powershell")
     if source_powershell is not None:
 
@@ -2650,19 +2530,6 @@ async def _complete_program_step(
     funcs[execute_metadata.name] = execute_program
     funcs[compile_metadata.name] = compile_program
     funcs[submit_metadata.name] = submit_program_result
-    agent, conversation = await _create_step_agent(
-        ai_socket,
-        _StepToolRegistry(
-            files={
-                "__fusion_flow_program_tools__": FileEntry(
-                    file_hash="",
-                    tools=tools,
-                    funcs=funcs,
-                )
-            }
-        ),
-        system_prompt=_PROGRAM_SYSTEM_PROMPT,
-    )
     contract: dict[str, object] = {
         "contract_version": 1,
         "workspace_root": str(workspace),
@@ -2717,12 +2584,56 @@ async def _complete_program_step(
             ],
         )
 
-    await _complete_step_agent(
-        agent,
-        conversation,
-        "Execute this exact Program contract:\n" + encoded_contract,
-        stop_when=lambda: submitted is not None,
-    )
+    program_message = "Execute this exact Program contract:\n" + encoded_contract
+    if agent_runtime is not None or host_name in {"codex", "hermes", "openclaw"}:
+        program_message = (
+            "Use the available Program tools through strict JSON tool calls. "
+            "Return exactly {\"tool\": \"name\", \"arguments\": {...}} with no prose. "
+            "Call compile_program before execute_program for compiled sources. "
+            "Call submit_program_result exactly once after the authoritative attempt.\n"
+            + program_message
+        )
+        session_id = f"program-{invocation.binding_name}-{new_opaque_id()}"
+        try:
+            await _run_host_program_tool_loop(
+                program_message,
+                funcs=funcs,
+                agent_response=lambda message: _host_program_agent_response(
+                    message,
+                    workspace=workspace,
+                    session_id=session_id,
+                    agent_runtime=agent_runtime,
+                ),
+                is_submitted=lambda: submitted is not None,
+            )
+        except Exception as error:
+            return _program_error_outputs(
+                invocation,
+                phase="agent",
+                kind="invalid_tool_call",
+                message=str(error),
+                attempts=attempts,
+            )
+    else:
+        agent, conversation = await _create_step_agent(
+            ai_socket,
+            _StepToolRegistry(
+                files={
+                    "__fusion_flow_program_tools__": FileEntry(
+                        file_hash="",
+                        tools=tools,
+                        funcs=funcs,
+                    )
+                }
+            ),
+            system_prompt=_PROGRAM_SYSTEM_PROMPT,
+        )
+        await _complete_step_agent(
+            agent,
+            conversation,
+            program_message,
+            stop_when=lambda: submitted is not None,
+        )
     if submitted is not None:
         return submitted
     return _program_error_outputs(
