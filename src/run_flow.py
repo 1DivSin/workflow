@@ -2189,6 +2189,9 @@ async def _host_program_agent_response(
                         chunks.append(content)
                     elif isinstance(content, dict) and isinstance(content.get("text"), str):
                         chunks.append(content["text"])
+                    elif isinstance(content, list):
+                        chunks.extend(item["text"] for item in content
+                                      if isinstance(item, dict) and isinstance(item.get("text"), str))
                 return "".join(chunks).strip()
             raise ExecutionPlanError("Program Step requires a supported host Agent runtime")
     finally:

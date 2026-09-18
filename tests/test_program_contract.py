@@ -181,25 +181,38 @@ class ProgramContractTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     async def test_hermes_uses_only_assistant_message_chunks(self):
-        class Client:
-            start = AsyncMock()
-            new_session = AsyncMock(return_value="s")
-            close = AsyncMock()
+        expected = '{"tool":"submit_program_result","arguments":{}}'
+        for content in (expected, {"text": expected}, [{"text": expected}]):
+            with self.subTest(content=content):
 
-            async def prompt(self, *args):
-                for kind, text in (
-                    ("agent_thought_chunk", "prepare environment"),
-                    ("agent_message_chunk", '{"tool":"submit_program_result","arguments":{}}'),
+                class Client:
+                    start = AsyncMock()
+                    new_session = AsyncMock(return_value="s")
+                    close = AsyncMock()
+
+                    async def prompt(self, *args):
+                        yield SimpleNamespace(
+                            params={
+                                "update": {
+                                    "sessionUpdate": "agent_thought_chunk",
+                                    "content": {"text": "prepare environment"},
+                                }
+                            }
+                        )
+                        yield SimpleNamespace(
+                            params={
+                                "update": {
+                                    "sessionUpdate": "agent_message_chunk",
+                                    "content": content,
+                                }
+                            }
+                        )
+
+                with (
+                    patch.dict(os.environ, {"PSI_WORKFLOW_HOST": "hermes"}),
+                    patch.object(runtime, "HermesACPClient", return_value=Client()),
                 ):
-                    yield SimpleNamespace(
-                        params={"update": {"sessionUpdate": kind, "content": {"text": text}}}
+                    text = await runtime._host_program_agent_response(
+                        "test", workspace=Path.cwd(), session_id="program", agent_runtime=None
                     )
-
-        with (
-            patch.dict(os.environ, {"PSI_WORKFLOW_HOST": "hermes"}),
-            patch.object(runtime, "HermesACPClient", return_value=Client()),
-        ):
-            text = await runtime._host_program_agent_response(
-                "test", workspace=Path.cwd(), session_id="program", agent_runtime=None
-            )
-        self.assertEqual(json.loads(text)["tool"], "submit_program_result")
+                self.assertEqual(json.loads(text)["tool"], "submit_program_result")
