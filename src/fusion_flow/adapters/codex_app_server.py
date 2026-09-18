@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio, json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from ..process import create_subprocess_exec
@@ -52,7 +53,9 @@ class CodexAppServerClient:
                 params = data.get("params", {})
                 log_path = self.env.get("CODEX_EVENT_LOG") if self.env else None
                 if log_path:
-                    with open(log_path, "a", encoding="utf-8") as log:
+                    log_file = Path(log_path).expanduser()
+                    log_file.parent.mkdir(parents=True, exist_ok=True)
+                    with log_file.open("a", encoding="utf-8") as log:
                         log.write(json.dumps({
                             "method": method,
                             "param_keys": sorted(params.keys()) if isinstance(params, dict) else [],

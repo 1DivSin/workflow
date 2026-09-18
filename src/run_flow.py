@@ -14,6 +14,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tomllib
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import aclosing, suppress
 from contextvars import ContextVar
@@ -92,6 +93,7 @@ from fusion_flow.host_adapter import (
     agent_runtime as _host_agent_runtime,
     agent_handle as _host_agent_handle,
     host_available as _host_available,
+    host_config as _host_config,
     state_dir as _host_state_dir,
     tools_dir as _host_tools_dir,
     workspace_dir as _host_workspace_dir,
@@ -537,6 +539,58 @@ def _agent_step_prompt(prompt: str, context: CompletionContext) -> str:
     )
 
 
+def _configured_codex_workflow_mcps() -> tuple[str, ...]:
+    """Return Workflow MCP names that are actually present in Codex config."""
+    codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    config_paths = [
+        Path(os.getenv("CODEX_CONFIG", str(codex_home / "config.toml"))).expanduser(),
+        _workspace_dir() / ".codex" / "config.toml",
+    ]
+    configured: set[str] = set()
+    for path in config_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        servers = data.get("mcp_servers")
+        if isinstance(servers, dict):
+            configured.update(name for name in ("fusion_flow", "workflow_codex") if name in servers)
+    return tuple(name for name in ("fusion_flow", "workflow_codex") if name in configured)
+
+
+def _isolated_codex_app_server_command(
+    command: tuple[str, ...],
+    server_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Disable configured Workflow MCPs only for the nested Codex app-server."""
+    try:
+        app_server_index = command.index("app-server")
+    except ValueError:
+        return command
+    overrides: list[str] = []
+    for server_name in server_names:
+        setting = f"mcp_servers.{server_name}.enabled=false"
+        if setting not in command:
+            overrides.extend(("--config", setting))
+    return (*command[:app_server_index], *overrides, *command[app_server_index:])
+
+
+def _codex_app_server_client() -> CodexAppServerClient:
+    config = _host_config(_workspace_dir())
+    if config is None or config.name != "codex":
+        raise ExecutionPlanError("Codex host configuration is unavailable")
+    return CodexAppServerClient(
+        command=_isolated_codex_app_server_command(
+            config.command,
+            _configured_codex_workflow_mcps(),
+        ),
+        cwd=str(_workspace_dir()),
+        env=config.env,
+    )
+
+
 class _AgentSessionAdapter:
     """Bridge G4 Agent leaves through ``flow.agent`` and ``flow.session``."""
 
@@ -718,22 +772,11 @@ class _AgentSessionAdapter:
         try:
             host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
             if host_name == "codex":
-                codex_prompt = (
-                    "Do not call tools, execute commands, inspect files, or start another workflow. "
-                    "Return only one JSON object as plain assistant text. "
-                    f"The required output key is {json.dumps(context.output_ids, ensure_ascii=False)}. "
-                    "For this validation test, the first response must use the JSON string value \"true\"."
-                )
+                codex_prompt = _agent_step_prompt(invocation.prompt, context)
                 outputs: dict[str, object] | None = None
                 last_error: ValueError | None = None
                 for attempt in range(2):
-                    client = CodexAppServerClient(
-                        command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
-                        cwd=str(_workspace_dir()),
-                        env={**os.environ, "CODEX_EVENT_LOG": str(
-                            _workspace_dir() / "flows" / "q08" / "runs" / f"codex-events-{os.getpid()}-{attempt}.jsonl"
-                        )},
-                    )
+                    client = _codex_app_server_client()
                     await client.start()
                     chunks: list[str] = []
                     try:
@@ -3156,10 +3199,7 @@ async def _prepare_human_step(
         raise AssertionError("unreachable")
 
     if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex":
-        client = CodexAppServerClient(
-            command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
-            cwd=str(_workspace_dir()),
-        )
+        client = _codex_app_server_client()
         await client.start()
         chunks: list[str] = []
         message = (
