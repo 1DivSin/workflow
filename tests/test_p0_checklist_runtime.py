@@ -110,6 +110,58 @@ class P0SelfContainedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 output_ids=("done",),
             )
 
+    async def test_q21_two_independent_programs_dispatch_in_parallel(self):
+        source = r"""
+const compile_result: Artifact;
+const help_result: Artifact;
+const compile_step: Step;
+const help_step: Step;
+const compile_program: Program, Executor;
+const help_program: Program, Executor;
+
+workflow q21_parallel {
+  input_workflow(q21_parallel) == [];
+  produces(compile_step) == [compile_result];
+  produces(help_step) == [help_result];
+  output_workflow(q21_parallel) == [compile_result, help_result];
+
+  step_executor(compile_step) == compile_program;
+  program_path(compile_program) == "./compile.py";
+  step_name(compile_step) == "Compile";
+  step_instruction(compile_step) == "Run compile command exactly once.";
+
+  step_executor(help_step) == help_program;
+  program_path(help_program) == "./help.py";
+  step_name(help_step) == "Help";
+  step_instruction(help_step) == "Run help command exactly once.";
+}
+"""
+        active = 0
+        max_active = 0
+        lock = asyncio.Lock()
+
+        async def run_program(invocation):
+            nonlocal active, max_active
+            async with lock:
+                active += 1
+                max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            async with lock:
+                active -= 1
+            return {invocation.output_ids[0]: invocation.binding_name}
+
+        result = await execute_workflow(
+            source,
+            inputs={},
+            run_program=run_program,
+            work_dir=ROOT,
+            supported_executor_kinds=("Program",),
+        )
+
+        self.assertEqual(max_active, 2)
+        self.assertEqual(result["compile_result"], "compile_step")
+        self.assertEqual(result["help_result"], "help_step")
+
     async def test_q27_never_converging_loop_stops_after_three_epochs(self):
         source = (ROOT / "examples" / "react_loop.workflow").read_text(encoding="utf-8")
         calls = {"reason": 0, "env_step": 0, "update": 0, "terminal": 0}
