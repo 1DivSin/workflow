@@ -175,7 +175,42 @@ export HERMES_ACP_COMMAND="/path/to/hermes-acp"
 export PSI_WORKFLOW_HERMES_SESSION_TIMEOUT=90
 ~~~
 
-Hermes Program steps execute the declared script deterministically with the workflow stdin and cwd. Agent TerminalStep and Human preparation responses are parsed against their strict JSON contracts, with bounded repair for invalid Agent output.
+### Program Agent execution
+
+A Program is an Agent-backed executor. All hosts reuse the same `compile_program`,
+`execute_program`, and `submit_program_result` functions in `run_flow.py`.
+The psi runtime registers these as native tools. Standalone Codex, Hermes, and
+OpenClaw use a text JSON bridge: the Agent returns one
+`{"tool":"execute_program","arguments":{"runtime":"python"}}` request; the
+workflow invokes that function and feeds the actual result back to the Agent.
+The prompt includes the Program policy, function signatures, tool descriptions,
+and execution contract. Subsequent turns include both earlier calls and results.
+This bridge does not register new native tools in the host or rely on model-written
+Artifact values. Native host tools may inspect and prepare the environment.
+
+- Interpreted source: `execute_program(runtime=...)` builds the declared script argv
+  and captures stdin, stdout, stderr, and exit status.
+- Compiled source: `compile_program(compile_argv, execute_argv, artifact_paths)` runs
+  the compiler and registers the source/artifact hashes and exact launch command.
+  `execute_program(compiled_launch_argv=...)` verifies this registration before launch.
+- `submit_program_result()` publishes captured output. In fidelity mode, repeated
+  execution requests do not launch again or replace the first captured result.
+
+Malformed or unknown bridge requests get one correction attempt. The entire
+conversation has a bounded tool-round count. A host turn (including initialization)
+uses `PSI_WORKFLOW_PROGRAM_AGENT_TIMEOUT`, defaulting to 90 seconds; Hermes retains
+`PSI_WORKFLOW_HERMES_SESSION_TIMEOUT` as the fallback. Program subprocess execution
+continues to use declared Step/workflow timeouts. Native transports drain stderr,
+clean up on failed initialization/cancellation, and bound their shutdown wait.
+
+Environment preparation is trusted workspace execution, not a sandbox. There is
+no executable-name blacklist. The declared source, logical arguments, input bytes,
+registered artifacts, and captured result remain the runtime contract. Host-native
+approval settings still apply; this bridge does not bypass or forward approval UI.
+Codex/Hermes currently start a native turn with replayed bridge history; an injected
+AgentRuntime also receives a stable logical session ID. Tests use deterministic
+Agent replies and real subprocesses/bytecode compilation; they do not certify live
+model behavior or every host's environment-installation permissions.
 
 ### Diagnostics
 
