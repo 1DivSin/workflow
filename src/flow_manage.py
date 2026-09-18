@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import UTC, datetime
 
 import anyio
+from fusion_flow._atomic_io import atomic_write_text
 from fusion_flow.host_adapter import workspace_dir as _host_workspace_dir
 
 
@@ -24,32 +25,33 @@ def _validate_flow_name(flow_name: str) -> str | None:
         return f"Invalid flow name {flow_name!r}: must not contain '..'."
     if "\x00" in flow_name:
         return f"Invalid flow name {flow_name!r}: must not contain null characters."
+    if flow_name.upper().split(".", 1)[0] in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}:
+        return f"Invalid flow name {flow_name!r}: reserved Windows device name."
     if not re.fullmatch(r"[A-Za-z0-9_-]+", flow_name):
         return f"Invalid flow name {flow_name!r}: only letters, digits, hyphens, and underscores are allowed."
     return None
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
-    if not content.startswith("---\n"):
+    if not content.startswith(("---\n", "---\r\n")):
         return {}, content
-    end = content.find("\n---", 4)
+    start = content.find("\n") + 1
+    end = content.find("\n---", start)
     if end == -1:
         return {}, content
 
     frontmatter: dict[str, str] = {}
-    for line in content[4:end].splitlines():
+    for line in content[start:end].splitlines():
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
         frontmatter[key.strip()] = value.strip().strip("\"'")
-    return frontmatter, content[end + 4 :].lstrip("\n")
+    return frontmatter, content[end + 4 :].lstrip("\r\n")
 
 
 async def _atomic_write(path: anyio.Path, content: str) -> None:
     await path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.parent / f"{path.name}.tmp"
-    await tmp.write_text(content, encoding="utf-8")
-    await tmp.replace(path)
+    await atomic_write_text(path, content)
 
 
 async def _find_task_flow(flows_dir: anyio.Path, flow_name: str) -> anyio.Path | None:

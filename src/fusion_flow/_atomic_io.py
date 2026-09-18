@@ -175,8 +175,16 @@ async def atomic_write_bytes(path: anyio.Path, value: bytes) -> None:
         await checkpoint_if_cancelled()
         # Keep commit and ownership transfer indivisible with respect to cancellation.
         with anyio.CancelScope(shield=True):
-            await owned_temporary.replace(target)
-            owned_temporary = None
+            for attempt in range(5):
+                try:
+                    await owned_temporary.replace(target)
+                except PermissionError:
+                    if os.name != "nt" or attempt == 4:
+                        raise
+                    await anyio.sleep(0.01 * (attempt + 1))
+                else:
+                    owned_temporary = None
+                    break
     except BaseException:
         if owned_temporary is not None:
             await _cleanup_owned_temporary(owned_temporary)
