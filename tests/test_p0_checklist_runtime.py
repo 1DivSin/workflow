@@ -138,7 +138,17 @@ class P0SelfContainedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 supported_executor_kinds=("Agent", "Program"),
                 max_loop_epochs=3,
             )
-        self.assertIn("max_loop_epochs=3", str(caught.exception))
+
+        pending = [caught.exception]
+        messages = []
+        while pending:
+            error = pending.pop()
+            messages.append(str(error))
+            pending.extend(getattr(error, "exceptions", ()))
+        self.assertTrue(
+            any("max_loop_epochs=3" in message for message in messages),
+            messages,
+        )
 
         self.assertEqual(calls["reason"], 3)
         self.assertEqual(calls["env_step"], 3)
