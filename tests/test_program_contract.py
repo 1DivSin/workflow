@@ -34,6 +34,19 @@ class Agent:
 
 
 class ProgramContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_program_agent_timeout_is_opt_in(self):
+        agent = Agent([call("submit_program_result")])
+        with patch.dict(os.environ, {"PSI_WORKFLOW_HOST": "codex"}, clear=False):
+            os.environ.pop("PSI_WORKFLOW_PROGRAM_AGENT_TIMEOUT", None)
+            with patch.object(runtime.anyio, "fail_after", side_effect=AssertionError("unexpected timeout")):
+                response = await runtime._host_program_agent_response(
+                    "test",
+                    workspace=Path.cwd(),
+                    session_id="program",
+                    agent_runtime=agent,
+                )
+        self.assertEqual(json.loads(response)["tool"], "submit_program_result")
+
     async def run_program(self, root, source, agent):
         inv = ProgramInvocation(
             name="program",
