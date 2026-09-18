@@ -13,7 +13,7 @@ def _spawn_argv(command: tuple[str, ...]) -> tuple[str, ...]:
     """Return an argv that asyncio can execute, including npm shims on Windows."""
     if not _is_windows_shim(command):
         return command
-    comspec = os.environ.get("COMSPEC", "cmd.exe")
+    comspec = os.environ.get("COMSPEC") or "cmd.exe"
     return (comspec, "/d", "/s", "/c", subprocess.list2cmdline(command))
 
 async def create_subprocess_exec(*command: str, **kwargs: Any) -> asyncio_subprocess.Process:

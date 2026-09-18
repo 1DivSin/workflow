@@ -51,6 +51,37 @@ class HostPathTests(unittest.TestCase):
         ):
             self.assertEqual(workspace_dir("."), (Path.cwd() / "relative-workspace").resolve())
 
+    def test_command_override_preserves_quoted_executable_path(self):
+        from fusion_flow.host_adapter import _split_command
+
+        self.assertEqual(
+            _split_command('"C:/Program Files/Hermes/hermes-acp" --stdio'),
+            ("C:/Program Files/Hermes/hermes-acp", "--stdio"),
+        )
+
+    def test_hermes_source_venv_uses_windows_scripts_layout(self):
+        from fusion_flow.host_adapter import host_config
+
+        with tempfile.TemporaryDirectory() as raw:
+            source = Path(raw)
+            python = source / ".venv" / "Scripts" / "python.exe"
+            python.parent.mkdir(parents=True)
+            python.write_text("", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "PSI_WORKFLOW_HOST": "hermes",
+                    "HERMES_SOURCE": str(source),
+                    "HERMES_EXECUTABLE": "",
+                    "HERMES_ACP_COMMAND": "",
+                },
+                clear=False,
+            ), patch("fusion_flow.host_adapter.os.name", "nt"), patch(
+                "fusion_flow.host_adapter.shutil.which", return_value=None
+            ):
+                config = host_config(source)
+            self.assertEqual(config.command[0], str(python))
+
     def test_host_adapter_has_no_machine_specific_source_root(self):
         from fusion_flow import host_adapter
 

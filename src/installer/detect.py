@@ -61,6 +61,10 @@ def _available(
     return bool(which(name) or host_home.exists())
 
 
+def _resolved_path(raw: str | Path, default: str | Path) -> Path:
+    return Path(raw or default).expanduser().resolve()
+
+
 def detect_host(
     root: str | Path = ".",
     *,
@@ -81,14 +85,14 @@ def detect_host(
     for name in names:
         if not _available(name, home=home_path, environ=env, which=which):
             continue
-        host_home = Path(env.get(f"{name.upper()}_HOME", str(home_path / f".{name}")))
-        workspace = Path(env.get(f"{name.upper()}_WORKSPACE", str(root_path)))
+        host_home = _resolved_path(env.get(f"{name.upper()}_HOME", ""), home_path / f".{name}")
+        workspace = _resolved_path(env.get(f"{name.upper()}_WORKSPACE", ""), root_path)
         if name == "codex":
-            skills_dir = Path(env.get("CODEX_SKILLS_DIR", str(home_path / ".agents" / "skills")))
+            skills_dir = _resolved_path(env.get("CODEX_SKILLS_DIR", ""), home_path / ".agents" / "skills")
         elif name == "openclaw":
-            skills_dir = Path(env.get("OPENCLAW_SKILLS_DIR", str(host_home / "skills")))
+            skills_dir = _resolved_path(env.get("OPENCLAW_SKILLS_DIR", ""), host_home / "skills")
         else:
-            skills_dir = Path(env.get("HERMES_SKILLS_DIR", str(host_home / "skills")))
+            skills_dir = _resolved_path(env.get("HERMES_SKILLS_DIR", ""), host_home / "skills")
 
         command_override = env.get(_COMMAND_OVERRIDES[name], "").strip()
         command = _split_command(command_override) if command_override else ()
@@ -102,8 +106,8 @@ def detect_host(
             "name": name,
             "home": str(host_home),
             "workspace": str(workspace),
-            "state_dir": str(Path(env.get("PSI_WORKFLOW_STATE_DIR", str(host_home / "state")))),
-            "tools_dir": str(Path(env.get("PSI_WORKFLOW_TOOLS_DIR", str(host_home / "tools")))),
+            "state_dir": str(_resolved_path(env.get("PSI_WORKFLOW_STATE_DIR", ""), host_home / "state")),
+            "tools_dir": str(_resolved_path(env.get("PSI_WORKFLOW_TOOLS_DIR", ""), host_home / "tools")),
             "skills_dir": str(skills_dir),
             "command": command,
             "executable": executable,
