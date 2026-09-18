@@ -246,10 +246,26 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
                     {"tool": "submit_program_result", "arguments": {}},
                 ]
             )
-            with patch.object(
-                runtime,
-                "_resolve_program_contract",
-                AsyncMock(return_value=(root, root, source)),
+            async def fake_execute(_invocation, argv, *, stdin):
+                if str(compiler) in argv:
+                    artifact.write_text("print('compiled tool path')\n", encoding="utf-8")
+                    return runtime._ProgramProcessResult(
+                        argv=tuple(argv), exit_code=0, stdout=b"", stderr=b""
+                    )
+                return runtime._ProgramProcessResult(
+                    argv=tuple(argv),
+                    exit_code=0,
+                    stdout=f"compiled tool path{os.linesep}".encode(),
+                    stderr=b"",
+                )
+
+            with (
+                patch.object(
+                    runtime,
+                    "_resolve_program_contract",
+                    AsyncMock(return_value=(root, root, source)),
+                ),
+                patch.object(runtime, "_execute_program_command", side_effect=fake_execute),
             ):
                 result = await runtime._complete_program_step(
                     invocation,
