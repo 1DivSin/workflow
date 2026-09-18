@@ -111,7 +111,7 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_program_agent_can_prepare_dependency_before_execution(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             script = root / "program.py"
             script.write_text(
                 "import prepared_dependency\nprint(prepared_dependency.VALUE)\n",
@@ -160,7 +160,7 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_program_agent_response_never_falls_back_to_direct_execution(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             marker = root / "executed.txt"
             script = root / "program.py"
             script.write_text(
@@ -196,15 +196,15 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
                     agent_runtime=host,
                 )
 
-        self.assertFalse(marker.exists())
-        self.assertEqual(host.calls, runtime._STEP_MAX_TURNS)
+            self.assertFalse(marker.exists())
+        self.assertEqual(host.calls, 2)
         diagnostic = result["result"]["$fusion_flow/program_error"]
         self.assertEqual(diagnostic["phase"], "agent")
         self.assertEqual(diagnostic["kind"], "invalid_tool_call")
 
     async def test_host_program_agent_compiles_and_executes_registered_artifact(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             source = root / "source.txt"
             compiler = root / "compiler.py"
             artifact = root / "compiled.py"
@@ -246,27 +246,7 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
                     {"tool": "submit_program_result", "arguments": {}},
                 ]
             )
-            async def fake_execute(_invocation, argv, *, stdin):
-                if str(compiler) in argv:
-                    artifact.write_text("print('compiled tool path')\n", encoding="utf-8")
-                    return runtime._ProgramProcessResult(
-                        argv=tuple(argv), exit_code=0, stdout=b"", stderr=b""
-                    )
-                return runtime._ProgramProcessResult(
-                    argv=tuple(argv),
-                    exit_code=0,
-                    stdout=f"compiled tool path{os.linesep}".encode(),
-                    stderr=b"",
-                )
-
-            with (
-                patch.object(
-                    runtime,
-                    "_resolve_program_contract",
-                    AsyncMock(return_value=(root, root, source)),
-                ),
-                patch.object(runtime, "_execute_program_command", side_effect=fake_execute),
-            ):
+            with patch.object(runtime, "_workspace_dir", return_value=root):
                 result = await runtime._complete_program_step(
                     invocation,
                     ai_socket="",
@@ -284,7 +264,7 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_host_program_agent_uses_structured_execution_tools(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             script = root / "program.py"
             script.write_text("print('tool path')\n", encoding="utf-8")
             invocation = ProgramInvocation(

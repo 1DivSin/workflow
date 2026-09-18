@@ -55,7 +55,7 @@ from fusion_flow.contracts import Diagnostic  # noqa: E402
 from fusion_flow.execution import (  # noqa: E402
     AgentConfig,
     AgentHandle,
-    AgentInvocation,
+    AgentInvocation as SessionInvocation,
     SessionResult,
     assert_safe_name,
     flow,
@@ -86,10 +86,11 @@ from fusion_flow.workflow_runner import (  # noqa: E402
     compile_workflow,
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
-from workflow_sample import _record_workflow_authoring
-from fusion_flow.adapters import HermesACPClient, CodexAppServerClient
-from fusion_flow.agent_runtime import AgentInvocation, AgentRuntime
-from fusion_flow.host_adapter import (
+from workflow_sample import _record_workflow_authoring  # noqa: E402
+from fusion_flow.adapters import HermesACPClient, CodexAppServerClient  # noqa: E402
+from fusion_flow.agent_runtime import AgentInvocation, AgentRuntime  # noqa: E402
+from fusion_flow.host_adapter import (  # noqa: E402
+    _split_command,
     agent_runtime as _host_agent_runtime,
     agent_handle as _host_agent_handle,
     host_available as _host_available,
@@ -206,39 +207,6 @@ _PROGRAM_AGENT_TOOLS = frozenset({"bash", "find_files", "list_dir", "powershell"
 _HUMAN_CONTROL_KEY = "$fusion_flow/control"
 _PROGRAM_ERROR_KEY = "$fusion_flow/program_error"
 _PROGRAM_REPAIR_MARKER = "Program execution policy: successful completion outranks fidelity."
-_PROGRAM_NON_INTERPRETER_COMMANDS = frozenset(
-    {
-        "cat",
-        "cp",
-        "echo",
-        "false",
-        "file",
-        "find",
-        "find.exe",
-        "findstr",
-        "findstr.exe",
-        "head",
-        "more",
-        "more.com",
-        "mv",
-        "printf",
-        "rm",
-        "sort",
-        "sort.exe",
-        "tail",
-        "tee",
-        "touch",
-        "true",
-        "type",
-        "unlink",
-        "wc",
-        "where",
-        "where.exe",
-        "xargs",
-        "xcopy",
-        "xcopy.exe",
-    }
-)
 _PROGRAM_STDOUT_LIMIT_BYTES = 4 * 1024 * 1024
 _PROGRAM_STDERR_LIMIT_BYTES = 1 * 1024 * 1024
 _PROGRAM_TERMINATION_GRACE_SECONDS = 1.0
@@ -757,7 +725,7 @@ class _AgentSessionAdapter:
     async def run_session(
         self,
         config: AgentConfig,
-        invocation: AgentInvocation,
+        invocation: SessionInvocation,
     ) -> SessionResult:
         """Run the existing structured SessionAgent loop before binding commit."""
 
@@ -2101,24 +2069,6 @@ def _program_executable_name(value: str) -> str:
     return Path(value).name.lower()
 
 
-def _program_argv_key(argv: tuple[str, ...]) -> tuple[str, ...]:
-    """Canonicalize absolute argv paths for compiled-launch identity checks."""
-
-    if os.name != "nt":
-        return argv
-    normalized: list[str] = []
-    for value in argv:
-        path = Path(value)
-        if path.is_absolute():
-            try:
-                normalized.append(str(path.resolve(strict=False)))
-                continue
-            except OSError:
-                pass
-        normalized.append(value)
-    return tuple(normalized)
-
-
 async def _program_file_sha256(path: Path) -> str:
     return hashlib.sha256(await anyio.Path(path).read_bytes()).hexdigest()
 
@@ -2134,9 +2084,6 @@ async def _build_interpreted_program_argv(
 
     if not runtime:
         return (str(script), *logical_args), ""
-    if _program_executable_name(runtime) in _PROGRAM_NON_INTERPRETER_COMMANDS:
-        return (), "The selected runtime is a general-purpose command, not a language interpreter."
-
     runtime_path = Path(runtime)
     candidate = anyio.Path(runtime_path)
     if runtime_path.is_absolute() or runtime_path.parent != Path("."):
@@ -2183,90 +2130,80 @@ async def _host_program_agent_response(
     session_id: str,
     agent_runtime: AgentRuntime | None,
 ) -> str:
-    """Run one host Agent turn used by the structured Program tool loop."""
-
-    if agent_runtime is not None:
-        if not agent_runtime.supports_agent_steps():
-            raise ExecutionPlanError("Host Agent runtime does not support Agent-backed Program steps")
-        reply = await agent_runtime.run_agent(
-            AgentInvocation(prompt, session_id, workspace)
-        )
-        if not reply.ok:
-            raise ExecutionPlanError(
-                f"Program Agent failed: {reply.error or reply.status}"
-            )
-        return reply.text
-
+    """Request one JSON bridge call; native turn text never becomes an Artifact."""
     host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
-    if host_name == "codex":
-        client = CodexAppServerClient(
-            command=tuple(
-                os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()
-            ),
-            cwd=str(workspace),
-        )
-        await client.start()
-        chunks: list[str] = []
-        try:
-            async for event in client.prompt(str(workspace), prompt):
-                if event.method == "item/agentMessage/delta":
-                    delta = event.params.get("delta")
-                    if isinstance(delta, str):
-                        chunks.append(delta)
-        finally:
-            await client.close()
-        return "".join(chunks).strip()
-
-    if host_name == "hermes":
-        timeout_value = os.getenv("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT", "90")
-        try:
-            timeout_seconds = float(timeout_value)
-        except ValueError as error:
-            raise ValueError("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT must be numeric") from error
-        client = HermesACPClient(
-            command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
-            cwd=str(workspace),
-        )
-        await client.start()
-        session_id = await client.new_session(str(workspace))
-        chunks: list[str] = []
-        try:
-            with anyio.fail_after(timeout_seconds):
-                async for event in client.prompt(session_id, prompt):
+    timeout = float(os.getenv(
+        "PSI_WORKFLOW_PROGRAM_AGENT_TIMEOUT",
+        os.getenv("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT", "90") if host_name == "hermes" else "90",
+    ))
+    if not 0 < timeout < float("inf"):
+        raise ValueError("Program Agent timeout must be a positive finite number")
+    client = None
+    try:
+        # Covers handshake and session creation too; Program subprocess timeouts
+        # are still the enclosing Step/workflow's responsibility.
+        with anyio.fail_after(timeout):
+            if agent_runtime is not None:
+                if not agent_runtime.supports_agent_steps():
+                    raise ExecutionPlanError("Host runtime cannot execute Agent-backed Program steps")
+                reply = await agent_runtime.run_agent(AgentInvocation(prompt, session_id, workspace))
+                if not reply.ok:
+                    raise ExecutionPlanError(f"Program Agent failed: {reply.error or reply.status}")
+                return reply.text
+            if host_name == "codex":
+                client = _codex_app_server_client()
+                await client.start()
+                chunks: list[str] = []
+                final_text: str | None = None
+                async for event in client.prompt(str(workspace), prompt):
+                    params = event.params
+                    if event.method in {"turn/failed", "turn/cancelled"}:
+                        raise ExecutionPlanError(f"Program Agent turn failed: {params}")
+                    if event.method == "turn/completed":
+                        turn = params.get("turn", {})
+                        if turn.get("status", "completed") != "completed":
+                            raise ExecutionPlanError(f"Program Agent turn failed: {turn}")
+                    if event.method == "item/started" and params.get("item", {}).get("type") == "agentMessage":
+                        chunks.clear()
+                    elif event.method == "item/agentMessage/delta" and isinstance(params.get("delta"), str):
+                        chunks.append(params["delta"])
+                    elif event.method == "item/completed":
+                        item = params.get("item", {})
+                        if item.get("type") == "agentMessage" and isinstance(item.get("text"), str):
+                            final_text = item["text"]
+                return (final_text if final_text is not None else "".join(chunks)).strip()
+            if host_name == "hermes":
+                client = HermesACPClient(
+                    command=_split_command(os.getenv("HERMES_ACP_COMMAND", "hermes-acp")),
+                    cwd=str(workspace),
+                )
+                await client.start()
+                hermes_session_id = await client.new_session(str(workspace))
+                chunks = []
+                async for event in client.prompt(hermes_session_id, prompt):
                     update = event.params.get("update", event.params)
-                    content = update.get("content") if isinstance(update, dict) else None
+                    if not isinstance(update, dict) or update.get("sessionUpdate") != "agent_message_chunk":
+                        continue
+                    content = update.get("content")
                     if isinstance(content, str):
                         chunks.append(content)
                     elif isinstance(content, dict) and isinstance(content.get("text"), str):
                         chunks.append(content["text"])
-                    elif isinstance(content, list):
-                        chunks.extend(
-                            item.get("text", "")
-                            for item in content
-                            if isinstance(item, dict) and isinstance(item.get("text"), str)
-                        )
-        finally:
-            await client.close()
-        return "".join(chunks).strip()
-
-    raise ExecutionPlanError(
-        "Program Step requires a host Agent runtime capable of structured tool calls"
-    )
+                return "".join(chunks).strip()
+            raise ExecutionPlanError("Program Step requires a supported host Agent runtime")
+    finally:
+        if client is not None:
+            with anyio.CancelScope(shield=True):
+                await client.close()
 
 
 def _parse_host_program_tool_call(value: str) -> tuple[str, dict[str, object]]:
-    try:
-        payload = json.loads(value)
-    except json.JSONDecodeError as error:
-        raise ValueError("Program Agent must return one JSON tool call") from error
+    payload = _parse_strict_json_value(value)
     if not isinstance(payload, dict) or set(payload) != {"tool", "arguments"}:
         raise ValueError("Program Agent tool call must contain exactly tool and arguments")
-    name = payload["tool"]
-    arguments = payload["arguments"]
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("Program Agent tool name must be a non-empty string")
-    if not isinstance(arguments, dict):
-        raise ValueError("Program Agent tool arguments must be a JSON object")
+    name, arguments = payload["tool"], payload["arguments"]
+    if not isinstance(name, str) or not name or not isinstance(arguments, dict):
+        raise ValueError("Program Agent needs a tool name and an arguments object")
     return name, arguments
 
 
@@ -2278,33 +2215,49 @@ async def _run_host_program_tool_loop(
     is_submitted: Callable[[], bool],
     max_turns: int = _STEP_MAX_TURNS,
 ) -> None:
-    message = initial_prompt
-    allowed = ", ".join(sorted(funcs))
+    descriptions = "\n\n".join(
+        f"{name}{inspect.signature(function)}\n{inspect.getdoc(function) or ''}"
+        for name, function in funcs.items()
+    )
+    message = (
+        _PROGRAM_SYSTEM_PROMPT + "\n\n"
+        "You may use the host's native tools to inspect and prepare the environment. "
+        "For compilation, contract execution and submission, use the bridge below. "
+        "Use strict JSON tool calls: return exactly {\"tool\":\"name\",\"arguments\":{...}}. "
+        "These bridge functions are called by the workflow process; do not invoke them "
+        "through shell commands or run the declared Program with native tools.\n\n"
+        "Available bridge tools (signatures and descriptions):\n" + descriptions
+        + "\n\n" + initial_prompt
+    )
+    invalid_calls = 0
     for _ in range(max_turns):
         raw = await agent_response(message)
         try:
             name, arguments = _parse_host_program_tool_call(raw)
-        except ValueError as error:
-            message += (
-                "\n\nPrevious response was invalid: "
-                + str(error)
-                + f". Return one JSON tool call using only: {allowed}."
-            )
+            if name not in funcs:
+                raise ValueError(f"Unknown Program tool {name!r}")
+            inspect.signature(funcs[name]).bind(**arguments)
+        except (ValueError, TypeError) as error:
+            invalid_calls += 1
+            if invalid_calls >= 2:
+                raise ExecutionPlanError("Program Agent tool call remained invalid after one repair") from error
+            message += f"\n\nInvalid response: {raw}\nError: {error}. Return one corrected JSON tool call."
             continue
-        function = funcs.get(name)
-        if function is None:
-            message += f"\nTool error: unknown Program tool {name!r}. Allowed tools: {allowed}."
-            continue
+        invalid_calls = 0
+        # Carry both calls and results: direct hosts may use stateless turns.
+        message += "\n\nAgent tool call:\n" + json.dumps({"tool": name, "arguments": arguments}, ensure_ascii=False)
         try:
-            result = function(**arguments)
+            result = funcs[name](**arguments)
             if inspect.isawaitable(result):
                 result = await result
-            encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
         except Exception as error:
-            encoded = json.dumps({"error": f"{type(error).__name__}: {error}"}, ensure_ascii=False)
-        message += f"\n\nTool result for {name}:\n{encoded}\nReturn the next JSON tool call only."
-        if name == "submit_program_result" and is_submitted():
+            if name == "submit_program_result":
+                raise
+            result = {"error": f"{type(error).__name__}: {error}"}
+        if is_submitted():
             return
+        encoded = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, allow_nan=False)
+        message += f"\nTool result for {name}:\n{encoded}\nReturn the next JSON tool call only."
     raise ExecutionPlanError("Program Agent exceeded the maximum tool-call rounds without submitting a result")
 
 
@@ -2353,7 +2306,7 @@ async def _complete_program_step(
             or any(not isinstance(argument, str) or not argument for argument in (*compiler_command, *launch_command))
         ):
             error = "compile_argv and execute_argv must contain non-empty string arguments."
-        elif _program_argv_key(compiler_command).count(_program_argv_key((str(script),))[0]) != 1:
+        elif compiler_command.count(str(script)) != 1:
             error = "compile_argv must contain the exact declared script_path once."
         elif not artifact_paths:
             error = "compile_program requires at least one artifact_path."
@@ -2370,12 +2323,8 @@ async def _complete_program_step(
                     break
                 artifacts.append(resolved)
             registered_command = (*launch_command, *logical_args)
-            registered_key = _program_argv_key(registered_command)
             if not error and not any(
-                any(
-                    candidate in registered_key
-                    for candidate in _program_argv_key((str(artifact), str(artifact.parent)))
-                )
+                str(artifact) in registered_command or str(artifact.parent) in registered_command
                 for artifact in artifacts
             ):
                 error = "execute_argv must reference a registered artifact or its containing directory."
@@ -2431,7 +2380,7 @@ async def _complete_program_step(
                     artifact_digests_list.append((artifact, await _program_file_sha256(artifact)))
                 artifact_digests = tuple(artifact_digests_list)
                 registered_command = (*launch_command, *logical_args)
-                registered_launches[_program_argv_key(registered_command)] = _RegisteredProgramLaunch(
+                registered_launches[registered_command] = _RegisteredProgramLaunch(
                     compile_argv=compiler_command,
                     execute_argv=registered_command,
                     source_sha256=source_digest,
@@ -2471,6 +2420,8 @@ async def _complete_program_step(
             and any execution error.
         """
 
+        if not repair_authorized and any(attempt.exit_code is not None for attempt in attempts):
+            return json.dumps({"error": "Program already launched; submit the captured result without re-executing."})
         compiled_command = tuple(compiled_launch_argv or ())
         if compiled_command and runtime:
             command = compiled_command
@@ -2512,8 +2463,6 @@ async def _complete_program_step(
         registration = registered_launches.get(command)
         if provenance_error:
             violation = provenance_error
-        elif not repair_authorized and any(attempt.exit_code is not None for attempt in attempts):
-            violation = "Fidelity mode permits only one launched Program attempt; submit the captured result."
         elif (script_changed or adapted_stdin) and not repair_authorized:
             violation = "The declared script or stdin changed while fidelity mode was active."
         elif (script_changed or adapted_stdin) and not adaptation_reason.strip():
@@ -2651,13 +2600,6 @@ async def _complete_program_step(
 
     program_message = "Execute this exact Program contract:\n" + encoded_contract
     if agent_runtime is not None or host_name in {"codex", "hermes", "openclaw"}:
-        program_message = (
-            "Use the available Program tools through strict JSON tool calls. "
-            "Return exactly {\"tool\": \"name\", \"arguments\": {...}} with no prose. "
-            "Call compile_program before execute_program for compiled sources. "
-            "Call submit_program_result exactly once after the authoritative attempt.\n"
-            + program_message
-        )
         session_id = f"program-{invocation.binding_name}-{new_opaque_id()}"
         try:
             await _run_host_program_tool_loop(

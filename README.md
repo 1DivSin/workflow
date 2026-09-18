@@ -175,11 +175,42 @@ export HERMES_ACP_COMMAND="/path/to/hermes-acp"
 export PSI_WORKFLOW_HERMES_SESSION_TIMEOUT=90
 ~~~
 
-Program Step uses the same Agent-backed contract on Codex, Hermes, OpenClaw, and the native psi runtime. The Agent receives the declared script contract plus `compile_program`, `execute_program`, `submit_program_result`, and workspace-preparation tools through a bounded JSON tool loop.
+### Program Agent execution
 
-For an interpreted Program, the Agent requests `execute_program(runtime=...)`; the host appends the declared script and immutable logical arguments, captures the real process result, and returns it to the Agent. For a compiled Program, the Agent first requests `compile_program` with the exact source, compiler argv, launch argv, and workspace-local artifacts. The host runs the compiler, records source/artifact hashes, then permits `execute_program(compiled_launch_argv=...)` only after revalidation. The Agent must submit the captured result once; it cannot author Artifact values directly.
+A Program is an Agent-backed executor. All hosts reuse the same `compile_program`,
+`execute_program`, and `submit_program_result` functions in `run_flow.py`.
+The psi runtime registers these as native tools. Standalone Codex, Hermes, and
+OpenClaw use a text JSON bridge: the Agent returns one
+`{"tool":"execute_program","arguments":{"runtime":"python"}}` request; the
+workflow invokes that function and feeds the actual result back to the Agent.
+The prompt includes the Program policy, function signatures, tool descriptions,
+and execution contract. Subsequent turns include both earlier calls and results.
+This bridge does not register new native tools in the host or rely on model-written
+Artifact values. Native host tools may inspect and prepare the environment.
 
-Agent preparation may inspect the workspace and install a missing runtime or dependency. Source paths, stdin, output capture, process cleanup, and fidelity checks remain runtime responsibilities. TerminalStep and Human preparation responses continue to use strict JSON contracts with bounded repair for invalid Agent output.
+- Interpreted source: `execute_program(runtime=...)` builds the declared script argv
+  and captures stdin, stdout, stderr, and exit status.
+- Compiled source: `compile_program(compile_argv, execute_argv, artifact_paths)` runs
+  the compiler and registers the source/artifact hashes and exact launch command.
+  `execute_program(compiled_launch_argv=...)` verifies this registration before launch.
+- `submit_program_result()` publishes captured output. In fidelity mode, repeated
+  execution requests do not launch again or replace the first captured result.
+
+Malformed or unknown bridge requests get one correction attempt. The entire
+conversation has a bounded tool-round count. A host turn (including initialization)
+uses `PSI_WORKFLOW_PROGRAM_AGENT_TIMEOUT`, defaulting to 90 seconds; Hermes retains
+`PSI_WORKFLOW_HERMES_SESSION_TIMEOUT` as the fallback. Program subprocess execution
+continues to use declared Step/workflow timeouts. Native transports drain stderr,
+clean up on failed initialization/cancellation, and bound their shutdown wait.
+
+Environment preparation is trusted workspace execution, not a sandbox. There is
+no executable-name blacklist. The declared source, logical arguments, input bytes,
+registered artifacts, and captured result remain the runtime contract. Host-native
+approval settings still apply; this bridge does not bypass or forward approval UI.
+Codex/Hermes currently start a native turn with replayed bridge history; an injected
+AgentRuntime also receives a stable logical session ID. Tests use deterministic
+Agent replies and real subprocesses/bytecode compilation; they do not certify live
+model behavior or every host's environment-installation permissions.
 
 ### Diagnostics
 
