@@ -85,7 +85,7 @@ from fusion_flow.workflow_runner import (  # noqa: E402
 )
 from fusion_flow.workflow_runner import execute_workflow as _execute_workflow  # noqa: E402
 from workflow_sample import _record_workflow_authoring
-from fusion_flow.adapters import HermesACPClient, CodexAppServerClient
+from fusion_flow.adapters import HermesACPClient, CodexAppServerClient, OpenClawGatewayClient
 from fusion_flow.agent_runtime import AgentInvocation, AgentRuntime
 from fusion_flow.host_adapter import (
     agent_runtime as _host_agent_runtime,
@@ -603,13 +603,60 @@ class _AgentSessionAdapter:
         invocation_id = context.dispatch.invocation_id or context.step_id
         session_id = _invocation_session_id(self._run_id, invocation_id)
         if self._agent_runtime is not None:
-            reply = await self._agent_runtime.run_agent(
-                AgentInvocation(_agent_step_prompt(prompt, context), session_id, _workspace_dir(),
-                                None if context.agent_config is None else context.agent_config.model)
-            )
-            if not reply.ok:
-                raise ExecutionPlanError(f"Agent runtime failed for step {context.step_id!r}: {reply.error or reply.status}")
-            return _parse_agent_step_result(reply.text, step_id=context.step_id, output_ids=context.output_ids)
+            message = _agent_step_prompt(prompt, context)
+            for attempt in range(2):
+                reply = await self._agent_runtime.run_agent(
+                    AgentInvocation(
+                        message,
+                        session_id,
+                        _workspace_dir(),
+                        None if context.agent_config is None else context.agent_config.model,
+                    )
+                )
+                if not reply.ok:
+                    raise ExecutionPlanError(
+                        f"Agent runtime failed for step {context.step_id!r}: {reply.error or reply.status}"
+                    )
+                try:
+                    outputs = _parse_agent_step_result(
+                        reply.text,
+                        step_id=context.step_id,
+                        output_ids=context.output_ids,
+                    )
+                    if context.terminal:
+                        _validate_terminal_step_outputs(
+                            outputs,
+                            step_id=context.step_id,
+                            output_ids=context.output_ids,
+                        )
+                    if attempt:
+                        logger.bind(
+                            event="fusion_flow.agent_step_repaired",
+                            step_id=context.step_id,
+                            repair_count=attempt,
+                            diagnostic_kind="invalid_output_contract",
+                        ).warning("Agent runtime accepted repaired output")
+                    return outputs
+                except ValueError as error:
+                    if attempt == 1:
+                        raise ValueError(
+                            f"step {context.step_id!r} result remained invalid after 2 attempts"
+                        ) from error
+                    terminal_hint = (
+                        "For this TerminalStep the value must be a JSON Boolean true or false, without quotes. "
+                        if context.terminal
+                        else ""
+                    )
+                    message = (
+                        f"Original step instruction:\n{prompt}\n\n"
+                        f"Your previous output failed validation: {error}. "
+                        "This is repair attempt number one. Do not redo the work or explain. "
+                        "Return exactly one JSON object as plain assistant content, keyed by exactly "
+                        f"{json.dumps(context.output_ids, ensure_ascii=False)}. "
+                        f"{terminal_hint}"
+                        "Submit no prose, Markdown, or tool call."
+                    )
+            raise AssertionError("unreachable")
 
         handle = self._handle(context)
         selected_tools = _select_agent_tools(
@@ -678,7 +725,7 @@ class _AgentSessionAdapter:
                 )
                 outputs: dict[str, object] | None = None
                 last_error: ValueError | None = None
-                for attempt in range(3):
+                for attempt in range(2):
                     client = CodexAppServerClient(
                         command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
                         cwd=str(_workspace_dir()),
@@ -730,8 +777,8 @@ class _AgentSessionAdapter:
                         break
                     except ValueError as error:
                         last_error = error
-                        if attempt == 2:
-                            raise ValueError(f"step {context.step_id!r} result remained invalid after 3 attempts") from error
+                        if attempt == 1:
+                            raise ValueError(f"step {context.step_id!r} result remained invalid after 2 attempts") from error
                         codex_prompt = (
                             f"Original instruction:\n{invocation.prompt}\n\n"
                             f"Previous output failed validation: {error}. "
@@ -757,7 +804,7 @@ class _AgentSessionAdapter:
                 await client.start()
                 session_id = await client.new_session(str(_workspace_dir()))
                 try:
-                    for attempt in range(3):
+                    for attempt in range(2):
                         chunks: list[str] = []
                         with anyio.fail_after(timeout_seconds):
                             async for event in client.prompt(session_id, hermes_prompt):
@@ -797,17 +844,22 @@ class _AgentSessionAdapter:
                             break
                         except ValueError as error:
                             last_error = error
-                            if attempt == 2:
+                            if attempt == 1:
                                 raise ValueError(
-                                    f"step {context.step_id!r} result remained invalid after 3 attempts"
+                                    f"step {context.step_id!r} result remained invalid after 2 attempts"
                                 ) from error
+                            terminal_hint = (
+                                "For this TerminalStep the value must be a JSON Boolean true or false, without quotes. "
+                                if context.terminal
+                                else ""
+                            )
                             hermes_prompt = (
                                 f"Original step instruction:\n{invocation.prompt}\n\n"
                                 f"Your previous output failed validation: {error}. "
                                 "This is repair attempt number one. Do not redo the work or explain. "
                                 "Return exactly one JSON object as plain assistant content, keyed by exactly "
                                 f"{json.dumps(context.output_ids, ensure_ascii=False)}. "
-                                "For this TerminalStep the value must be the JSON Boolean true, without quotes. "
+                                f"{terminal_hint}"
                                 "Submit no prose, Markdown, or tool call."
                             )
                 finally:
@@ -1177,8 +1229,10 @@ def _parse_prepared_human_question(value: str) -> _PreparedHumanQuestion:
         raise ValueError("Human instruction preparer options must contain at most four entries")
     if type(recommended) is not int or not 0 <= recommended <= len(options):
         raise ValueError(f"Human instruction preparer recommended must be between 0 and {len(options)}")
+    if default is None:
+        default = ""
     if not isinstance(default, str):
-        raise ValueError("Human instruction preparer default must be a string")
+        raise ValueError("Human instruction preparer default must be a string or null")
     typed_options = cast(list[str], options)
     return _PreparedHumanQuestion(
         question=question.strip(),
@@ -2115,26 +2169,60 @@ async def _complete_program_step_hermes(invocation: ProgramInvocation) -> dict[s
             pass
     raise ValueError("Hermes Program agent returned no valid captured stdout")
 async def _complete_program_step_openclaw(invocation: ProgramInvocation) -> dict[str, object]:
-    workspace, cwd, script = await _resolve_program_contract(invocation)
+    _, cwd, script = await _resolve_program_contract(invocation)
+    chunks: list[str] = []
     client = OpenClawGatewayClient()
-    await client.start()
-    chunks = []
     try:
-        prompt = "Execute the declared Program once. Run this script and return only its captured stdout as strict JSON: " + str(script)
-        async for event in client.prompt(prompt):
-            payload = event.payload
-            text = payload.get("text") if isinstance(payload, dict) else None
-            if isinstance(text, str): chunks.append(text)
-    finally:
-        await client.close()
+        await client.start()
+        try:
+            prompt = (
+                "Execute the declared Program once. Run this script and return only its captured stdout "
+                "as strict JSON: " + str(script)
+            )
+            async for event in client.prompt(prompt):
+                payload = event.payload
+                text = payload.get("text") if isinstance(payload, dict) else None
+                if isinstance(text, str):
+                    chunks.append(text)
+        finally:
+            await client.close()
+    except (OSError, RuntimeError) as error:
+        logger.warning(
+            f"OpenClaw gateway unavailable for Program step {invocation.binding_name!r}; "
+            f"falling back to direct execution: {error}"
+        )
+
     for text in reversed(chunks):
         for candidate in [text.strip(), *reversed(text.strip().splitlines())]:
             try:
-                return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, candidate.strip('` ').strip(), terminal=invocation.terminal)
+                return _normalize_program_stdout(
+                    invocation.binding_name,
+                    invocation.output_ids,
+                    candidate.strip('` ').strip(),
+                    terminal=invocation.terminal,
+                )
             except ValueError:
                 pass
-    result = subprocess.run([sys.executable, str(script)], cwd=str(cwd), input=invocation.stdin or "", text=True, capture_output=True, check=False)
-    return _normalize_program_stdout(invocation.binding_name, invocation.output_ids, result.stdout.strip(), terminal=invocation.terminal)
+
+    result = subprocess.run(
+        [sys.executable, str(script), *invocation.argv[1:]],
+        cwd=str(cwd),
+        input=invocation.stdin or "",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"OpenClaw Program step {invocation.binding_name!r} failed with exit code "
+            f"{result.returncode}: {result.stderr.strip()}"
+        )
+    return _normalize_program_stdout(
+        invocation.binding_name,
+        invocation.output_ids,
+        result.stdout.strip(),
+        terminal=invocation.terminal,
+    )
 
 
 async def _complete_program_step(
@@ -2902,7 +2990,7 @@ async def _complete_agent_step(
                     submission_error = ValueError("step result was submitted more than once")
         return True
 
-    for attempt in range(3):
+    for attempt in range(2):
         submission_error = None
         repair_response: str | None = None
         try:
@@ -2957,7 +3045,7 @@ async def _complete_agent_step(
                 repair_response = response
             except ValueError as error:
                 validation_error = error
-        if attempt == 2:
+        if attempt == 1:
             if repair_response is not None:
                 try:
                     repaired, repair_count, response_form = _parse_agent_step_result_with_json_repair(
@@ -2987,7 +3075,7 @@ async def _complete_agent_step(
                             output_ids=context.output_ids,
                         )
                     return repaired
-            raise ValueError(f"step {context.step_id!r} result remained invalid after 3 attempts") from validation_error
+            raise ValueError(f"step {context.step_id!r} result remained invalid after 2 attempts") from validation_error
         annotation_text = (
             f"Output Artifact annotations: {json.dumps(output_annotations, ensure_ascii=False, sort_keys=True)}. "
             if output_annotations
@@ -3018,12 +3106,26 @@ async def _prepare_human_step(
             "options contains at most four strings; recommended is a 1-based index or 0; "
             "default applies only to free-text questions.\n" + prompt
         )
-        reply = await agent_runtime.run_agent(AgentInvocation(
-            message, f"human-{context.step_id}-{new_opaque_id()}", _workspace_dir(),
-        ))
-        if not reply.ok:
-            raise ExecutionPlanError(f"Human preparation failed: {reply.error or reply.status}")
-        return _prepared_question_json(_parse_prepared_human_question(reply.text))
+        session_id = f"human-{context.step_id}-{new_opaque_id()}"
+        for attempt in range(2):
+            reply = await agent_runtime.run_agent(
+                AgentInvocation(message, session_id, _workspace_dir())
+            )
+            if not reply.ok:
+                raise ExecutionPlanError(f"Human preparation failed: {reply.error or reply.status}")
+            try:
+                return _prepared_question_json(_parse_prepared_human_question(reply.text))
+            except ValueError as error:
+                if attempt == 1:
+                    raise
+                message = (
+                    f"Original Human-step instruction:\n{prompt}\n\n"
+                    f"Your previous Human request failed validation: {error}. "
+                    "This is repair attempt number one. Return exactly one JSON object with exactly "
+                    'question, options, recommended, and default. Use default="" when there is no default. '
+                    "Do not add Markdown or prose."
+                )
+        raise AssertionError("unreachable")
 
     if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "codex":
         client = CodexAppServerClient(

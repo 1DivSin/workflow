@@ -91,7 +91,14 @@ class OpenClawCliRuntime:
             return AgentReply(status="error", error=stderr.decode("utf-8", "replace") or "OpenClaw returned invalid JSON")
         if not isinstance(payload, dict): return AgentReply(status="error", error="OpenClaw result must be an object")
         status = payload.get("status", "ok" if payload.get("ok") is True else "error")
-        text = payload.get("final", payload.get("text", ""))
+        text = payload.get("final")
+        if not isinstance(text, str):
+            text = payload.get("text")
+        nested = payload.get("result")
+        if not isinstance(text, str) and isinstance(nested, dict):
+            text = nested.get("finalAssistantVisibleText")
+            if not isinstance(text, str):
+                text = nested.get("text")
         error = payload.get("error")
         if isinstance(error, dict): error = error.get("message")
         reply = AgentReply(text=text if isinstance(text, str) else "", status=status if isinstance(status, str) else "error", error=error if isinstance(error, str) else None)
