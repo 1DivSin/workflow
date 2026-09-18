@@ -1,0 +1,135 @@
+name: Self-hosted three-host smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - workflow-e2e
+
+    timeout-minutes: 20
+
+    steps:
+      - name: Environment
+        shell: pwsh
+        run: |
+          Write-Host "===== USER ====="
+          whoami
+
+          Write-Host "===== USERPROFILE ====="
+          Write-Host $env:USERPROFILE
+
+          Write-Host "===== WORKSPACE ====="
+          Test-Path "C:\Users\aa\workflow_workspace"
+          Test-Path "C:\Users\aa\workflow_workspace\repos"
+          Test-Path "C:\Users\aa\workflow_workspace\repos\workflow"
+          Test-Path "C:\Users\aa\workflow_workspace\repos\psi-agent"
+
+      - name: Codex executable
+        shell: pwsh
+        run: |
+          $codex = "C:\Users\aa\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe"
+
+          & $codex --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Codex version check failed"
+          }
+
+      - name: Hermes executable
+        shell: pwsh
+        run: |
+          $hermes = "C:\Users\aa\AppData\Local\hermes\bin\hermes.exe"
+
+          & $hermes --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Hermes version check failed"
+          }
+
+      - name: OpenClaw executable
+        shell: pwsh
+        run: |
+          $openclaw = "C:\Users\aa\AppData\Roaming\npm\openclaw.cmd"
+
+          & $openclaw --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "OpenClaw version check failed"
+          }
+
+      - name: Codex model smoke
+        shell: pwsh
+        working-directory: C:\Users\aa\workflow_workspace
+        run: |
+          $codex = "C:\Users\aa\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe"
+
+          $output = & $codex exec "Reply with exactly: CODEX_SMOKE_OK" 2>&1 |
+            Out-String
+
+          Write-Host $output
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Codex model call failed"
+          }
+
+          if ($output -notmatch "CODEX_SMOKE_OK") {
+            throw "Codex did not return expected smoke marker"
+          }
+
+      - name: Hermes model smoke
+        shell: pwsh
+        working-directory: C:\Users\aa\workflow_workspace
+        run: |
+          $hermes = "C:\Users\aa\AppData\Local\hermes\bin\hermes.exe"
+
+          $output = & $hermes chat --oneshot -q `
+            "Reply with exactly: HERMES_SMOKE_OK" 2>&1 |
+            Out-String
+
+          Write-Host $output
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Hermes model call failed"
+          }
+
+          if ($output -notmatch "HERMES_SMOKE_OK") {
+            throw "Hermes did not return expected smoke marker"
+          }
+
+      - name: OpenClaw gateway status
+        shell: pwsh
+        run: |
+          $openclaw = "C:\Users\aa\AppData\Roaming\npm\openclaw.cmd"
+
+          & $openclaw gateway status --require-rpc
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "OpenClaw Gateway RPC is unavailable"
+          }
+
+      - name: OpenClaw model smoke
+        shell: pwsh
+        working-directory: C:\Users\aa\workflow_workspace
+        run: |
+          $openclaw = "C:\Users\aa\AppData\Roaming\npm\openclaw.cmd"
+
+          $session = "workflow-e2e-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+
+          $output = & $openclaw agent `
+            --agent main `
+            --session-key $session `
+            --message "Reply with exactly: OPENCLAW_SMOKE_OK" `
+            --json 2>&1 |
+            Out-String
+
+          Write-Host $output
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "OpenClaw model call failed"
+          }
+
+          if ($output -notmatch "OPENCLAW_SMOKE_OK") {
+            throw "OpenClaw did not return expected smoke marker"
+          }
