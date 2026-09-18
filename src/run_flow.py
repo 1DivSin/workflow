@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import aclosing, suppress
+from contextlib import aclosing, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -2132,17 +2132,17 @@ async def _host_program_agent_response(
 ) -> str:
     """Request one JSON bridge call; native turn text never becomes an Artifact."""
     host_name = os.getenv("PSI_WORKFLOW_HOST", "").strip().lower()
-    timeout = float(os.getenv(
-        "PSI_WORKFLOW_PROGRAM_AGENT_TIMEOUT",
-        os.getenv("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT", "90") if host_name == "hermes" else "90",
-    ))
-    if not 0 < timeout < float("inf"):
+    timeout_value = os.getenv("PSI_WORKFLOW_PROGRAM_AGENT_TIMEOUT")
+    if timeout_value is None and host_name == "hermes":
+        timeout_value = os.getenv("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT")
+    timeout = float(timeout_value) if timeout_value else None
+    if timeout is not None and not 0 < timeout < float("inf"):
         raise ValueError("Program Agent timeout must be a positive finite number")
     client = None
     try:
-        # Covers handshake and session creation too; Program subprocess timeouts
-        # are still the enclosing Step/workflow's responsibility.
-        with anyio.fail_after(timeout):
+        # Host-Agent timeouts are opt-in. Program subprocess timeouts are still
+        # the enclosing Step/workflow's responsibility.
+        with anyio.fail_after(timeout) if timeout is not None else nullcontext():
             if agent_runtime is not None:
                 if not agent_runtime.supports_agent_steps():
                     raise ExecutionPlanError("Host runtime cannot execute Agent-backed Program steps")
