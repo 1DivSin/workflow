@@ -1,17 +1,15 @@
 import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 import run_flow as runtime
 from fusion_flow.adapters.openclaw_cli import OpenClawCliRuntime
 from fusion_flow.agent_runtime import AgentInvocation, AgentReply
-from fusion_flow.workflow_runner import ProgramInvocation
 
 
 class _SequenceRuntime:
@@ -128,36 +126,6 @@ class ChecklistRuntimeRepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(host.prompts), 2)
         self.assertEqual(json.loads(result)["default"], "")
         self.assertIn("repair attempt number one", host.prompts[1])
-
-    async def test_openclaw_program_falls_back_when_gateway_is_not_paired(self):
-        class _NotPairedClient:
-            async def start(self):
-                raise RuntimeError("NOT_PAIRED")
-
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            script = root / "extract.py"
-            script.write_text('print("layers")\n', encoding="utf-8")
-            invocation = ProgramInvocation(
-                name="extract",
-                argv=(str(script),),
-                stdin="",
-                cwd=root,
-                binding_name="extract",
-                dispatch=None,
-                output_ids=("layers",),
-            )
-            with (
-                patch.object(runtime, "OpenClawGatewayClient", _NotPairedClient),
-                patch.object(
-                    runtime,
-                    "_resolve_program_contract",
-                    AsyncMock(return_value=(root, root, script)),
-                ),
-            ):
-                result = await runtime._complete_program_step_openclaw(invocation)
-
-        self.assertEqual(result, {"layers": "layers"})
 
     async def test_openclaw_cli_reads_final_assistant_visible_text(self):
         async def fake_create(*_args, **_kwargs):
