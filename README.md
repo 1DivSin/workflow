@@ -175,7 +175,7 @@ export HERMES_ACP_COMMAND="/path/to/hermes-acp"
 export PSI_WORKFLOW_HERMES_SESSION_TIMEOUT=90
 ~~~
 
-Hermes Program steps execute the declared script deterministically with the workflow stdin and cwd. Agent TerminalStep and Human preparation responses are parsed against their strict JSON contracts, with bounded repair for invalid Agent output.
+Hermes Program steps first run a specialized Program Agent to inspect and prepare the interpreter and dependencies; the host then builds the authoritative interpreter argv and captures the process result. The standalone host adapter fails closed for compiled Programs until structured `compile_program` bridging is available. Agent TerminalStep and Human preparation responses are parsed against their strict JSON contracts, with bounded repair for invalid Agent output.
 
 ### Diagnostics
 
