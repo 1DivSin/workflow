@@ -23,6 +23,17 @@ This creates isolated, source-independent `dynamic-workflow`,
 configuration records the absolute installed CLI path rather than the Python
 interpreter that happened to run the installer.
 
+To provision separate Codex and Hermes integrations in one run, repeat `--host`:
+
+```sh
+dynamic-workflow install --host codex --host hermes --workspace /path/to/project
+```
+
+This creates one host-specific registration, asset destination, and state directory per
+host. Each frontend then starts its own MCP process; no shared shell-wide host selector
+is required.
+
+
 #### Codex
 
 ```sh

@@ -1,4 +1,4 @@
-﻿import tempfile
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -44,6 +44,43 @@ class BatchInstallTests(unittest.TestCase):
             status = cli.main(["installer", ".", "--all"])
         self.assertEqual(status, 0)
         self.assertTrue(install_many.call_args.kwargs["register_plugin"])
+
+    def test_install_many_creates_independent_host_assets_and_state(self):
+        from installer.installer import install_many
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source = root / "source"
+            (source / "src").mkdir(parents=True)
+            (source / "src" / "SKILL.md").write_text("---\nname: workflow\n---\n", encoding="utf-8")
+            hosts = [
+                {
+                    "name": "codex",
+                    "home": str(root / "codex-home"),
+                    "workspace": str(root / "codex-workspace"),
+                    "state_dir": str(root / "codex-state"),
+                    "tools_dir": str(root / "codex-tools"),
+                    "skills_dir": str(root / "codex-skills"),
+                },
+                {
+                    "name": "hermes",
+                    "home": str(root / "hermes-home"),
+                    "workspace": str(root / "hermes-workspace"),
+                    "state_dir": str(root / "hermes-state"),
+                    "tools_dir": str(root / "hermes-tools"),
+                    "skills_dir": str(root / "hermes-skills"),
+                },
+            ]
+            results = install_many(source, hosts)
+
+            self.assertEqual([result["host"] for result in results], ["codex", "hermes"])
+            self.assertTrue(all(result["ok"] for result in results))
+            self.assertTrue((root / "codex-tools" / "genuineknowledge-method").is_dir())
+            self.assertTrue((root / "hermes-tools" / "genuineknowledge-method").is_dir())
+            self.assertTrue((root / "codex-state" / "genuineknowledge-method.json").is_file())
+            self.assertTrue((root / "hermes-state" / "genuineknowledge-method.json").is_file())
+            self.assertIn('PSI_WORKFLOW_HOST = "codex"', (root / "codex-home" / "config.toml").read_text())
+            self.assertIn('PSI_WORKFLOW_HOST: "hermes"', (root / "hermes-home" / "config.yaml").read_text())
 
     def test_all_and_host_are_mutually_exclusive(self):
         with self.assertRaises(SystemExit):
