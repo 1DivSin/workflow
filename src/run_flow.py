@@ -724,7 +724,8 @@ class _AgentSessionAdapter:
                     "For this validation test, the first response must use the JSON string value \"true\"."
                 )
                 outputs: dict[str, object] | None = None
-                            for attempt in range(2):
+                last_error: ValueError | None = None
+                for attempt in range(2):
                     client = CodexAppServerClient(
                         command=tuple(os.getenv("CODEX_APP_SERVER_COMMAND", "codex app-server --stdio").split()),
                         cwd=str(_workspace_dir()),
@@ -775,7 +776,8 @@ class _AgentSessionAdapter:
                         outputs = candidate
                         break
                     except ValueError as error:
-                                    if attempt == 1:
+                        last_error = error
+                        if attempt == 1:
                             raise ValueError(f"step {context.step_id!r} result remained invalid after 2 attempts") from error
                         codex_prompt = (
                             f"Original instruction:\n{invocation.prompt}\n\n"
@@ -794,7 +796,8 @@ class _AgentSessionAdapter:
                     raise ValueError("PSI_WORKFLOW_HERMES_SESSION_TIMEOUT must be numeric") from error
                 hermes_prompt = invocation.prompt
                 outputs: dict[str, object] | None = None
-                            client = HermesACPClient(
+                last_error: ValueError | None = None
+                client = HermesACPClient(
                     command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
                     cwd=str(_workspace_dir()),
                 )
@@ -840,7 +843,8 @@ class _AgentSessionAdapter:
                                 ).warning("Hermes Agent Step accepted repaired output")
                             break
                         except ValueError as error:
-                                            if attempt == 1:
+                            last_error = error
+                            if attempt == 1:
                                 raise ValueError(
                                     f"step {context.step_id!r} result remained invalid after 2 attempts"
                                 ) from error
@@ -2287,7 +2291,6 @@ async def _complete_host_program_step(
     session_id = f"program-{invocation.binding_name}-{new_opaque_id()}"
     message = guidance
     runtime = ""
-    last_error: ValueError | None = None
     for attempt in range(2):
         response = await _host_program_agent_response(
             message,
@@ -2299,7 +2302,6 @@ async def _complete_host_program_step(
             runtime = _parse_host_program_preparation(response)
             break
         except ValueError as error:
-            last_error = error
             if attempt == 1:
                 return _program_error_outputs(
                     invocation,
