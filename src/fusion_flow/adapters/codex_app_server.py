@@ -18,7 +18,10 @@ class CodexAppServerClient:
         self._next_id = 0
 
     async def start(self) -> None:
-        self.proc = await create_subprocess_exec(*self.command, cwd=self.cwd, env=self.env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            self.proc = await create_subprocess_exec(*self.command, cwd=self.cwd, env=self.env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        except OSError as error:
+            raise RuntimeError(f"Codex app-server could not start: {error}") from error
         await self.request("initialize", {"clientInfo": {"name": "fusion-flow", "version": "0.1"}, "capabilities": {}})
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
