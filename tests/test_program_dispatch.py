@@ -274,7 +274,11 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
                     agent_runtime=host,
                 )
 
-        self.assertEqual(result, {"result": f"compiled tool path{os.linesep}"})
+        self.assertEqual(
+            result,
+            {"result": f"compiled tool path{os.linesep}"},
+            json.dumps(result, ensure_ascii=False, sort_keys=True),
+        )
         self.assertEqual(len(host.prompts), 3)
         self.assertIn("registered", host.prompts[1])
 
@@ -310,7 +314,11 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
                     agent_runtime=host,
                 )
 
-        self.assertEqual(result, {"result": f"tool path{os.linesep}"})
+        self.assertEqual(
+            result,
+            {"result": f"tool path{os.linesep}"},
+            json.dumps(result, ensure_ascii=False, sort_keys=True),
+        )
         self.assertEqual(host.calls, 2)
         self.assertIn("compile_program", host.prompts[0])
         self.assertIn("execute_program", host.prompts[0])
