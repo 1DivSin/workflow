@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -108,7 +109,7 @@ class ProgramDispatchTests(unittest.IsolatedAsyncioTestCase):
                     agent_runtime=host,
                 )
 
-        self.assertEqual(result, {"result": "ready\n"})
+        self.assertEqual(result, {"result": f"ready{os.linesep}"})
         self.assertEqual(len(host.prompts), 1)
         contract_prompt = host.prompts[0]
         self.assertIn('"script_path"', contract_prompt)
