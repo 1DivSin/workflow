@@ -502,3 +502,33 @@ def install(
     )
 
     return d
+
+
+def install_many(
+    source=None,
+    hosts=(),
+    *,
+    destination=None,
+    register_plugin=False,
+    accept_capabilities=False,
+) -> list[dict[str, object]]:
+    """Install each selected host and collect failures so later hosts still run."""
+    hosts = list(hosts)
+    if destination is not None and len(hosts) > 1:
+        raise ValueError("--destination can only be used with one host")
+    results = []
+    for host in hosts:
+        name = str(host["name"])
+        result = {"host": name}
+        try:
+            target = install(
+                source, host=host, destination=destination, target_host=name,
+                register_plugin=register_plugin and name == "openclaw",
+                accept_capabilities=accept_capabilities,
+            )
+        except Exception as error:
+            result.update(ok=False, error=str(error))
+        else:
+            result.update(ok=True, target=str(target))
+        results.append(result)
+    return results

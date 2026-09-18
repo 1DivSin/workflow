@@ -1,0 +1,54 @@
+﻿import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+import sys
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
+
+from installer import cli
+from installer.detect import detect_hosts
+
+
+class BatchInstallTests(unittest.TestCase):
+    def test_detect_hosts_returns_all_hosts_in_stable_order(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            for name in ("codex", "openclaw", "hermes"):
+                (home / f".{name}").mkdir()
+            hosts = detect_hosts(home=home, environ={}, which=lambda _: None)
+        self.assertEqual([host["name"] for host in hosts], ["codex", "openclaw", "hermes"])
+
+    def test_repeated_host_options_install_each_host_and_continue_after_failure(self):
+        hosts = [
+            {"name": "codex", "available": True},
+            {"name": "hermes", "available": True},
+        ]
+        results = [
+            {"host": "codex", "ok": True, "target": "codex-target"},
+            {"host": "hermes", "ok": False, "error": "failed"},
+        ]
+        with patch("installer.cli.detect_host", side_effect=hosts), patch(
+            "installer.cli.install_many", return_value=results
+        ) as install_many:
+            status = cli.main(["installer", ".", "--host", "codex", "--host", "hermes"])
+        self.assertEqual(status, 1)
+        self.assertEqual(install_many.call_args.args[1], hosts)
+
+    def test_all_uses_batch_installer_and_auto_registers_openclaw(self):
+        hosts = [{"name": "codex", "available": True}, {"name": "openclaw", "available": True}]
+        results = [{"host": "codex", "ok": True, "target": "codex"}, {"host": "openclaw", "ok": True, "target": "openclaw"}]
+        with patch("installer.cli.detect_hosts", return_value=hosts), patch(
+            "installer.cli.install_many", return_value=results
+        ) as install_many:
+            status = cli.main(["installer", ".", "--all"])
+        self.assertEqual(status, 0)
+        self.assertTrue(install_many.call_args.kwargs["register_plugin"])
+
+    def test_all_and_host_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit):
+            cli.main(["installer", ".", "--all", "--host", "codex"])
+
+
+if __name__ == "__main__":
+    unittest.main()
