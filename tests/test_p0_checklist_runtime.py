@@ -103,7 +103,7 @@ class P0SelfContainedRuntimeTests(unittest.IsolatedAsyncioTestCase):
         diagnostic = result["done"]["$fusion_flow/program_error"]
         self.assertEqual(diagnostic["kind"], "invalid_output_contract")
         self.assertIn("true or false", diagnostic["message"])
-        with self.assertRaisesRegex(ValueError, "strict Boolean"):
+        with self.assertRaisesRegex(ValueError, "strict JSON boolean"):
             runtime._validate_terminal_step_outputs(
                 result,
                 step_id="terminal",
@@ -128,7 +128,7 @@ class P0SelfContainedRuntimeTests(unittest.IsolatedAsyncioTestCase):
             calls["terminal"] += 1
             return {"loop_done": False}
 
-        with self.assertRaisesRegex(ExecutionPlanError, "max_loop_epochs=3"):
+        with self.assertRaises(BaseExceptionGroup) as caught:
             await execute_workflow(
                 source,
                 inputs={"prompt": "seed"},
@@ -138,6 +138,7 @@ class P0SelfContainedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 supported_executor_kinds=("Agent", "Program"),
                 max_loop_epochs=3,
             )
+        self.assertIn("max_loop_epochs=3", str(caught.exception))
 
         self.assertEqual(calls["reason"], 3)
         self.assertEqual(calls["env_step"], 3)
