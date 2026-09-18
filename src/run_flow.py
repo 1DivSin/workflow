@@ -819,7 +819,7 @@ class _AgentSessionAdapter:
                 outputs: dict[str, object] | None = None
                 last_error: ValueError | None = None
                 client = HermesACPClient(
-                    command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
+                    command=_split_command(os.getenv("HERMES_ACP_COMMAND", "hermes-acp")),
                     cwd=str(_workspace_dir()),
                 )
                 await client.start()
@@ -3190,7 +3190,7 @@ async def _prepare_human_step(
 
     if os.getenv("PSI_WORKFLOW_HOST", "").strip().lower() == "hermes":
         client = HermesACPClient(
-            command=tuple(os.getenv("HERMES_ACP_COMMAND", "hermes-acp").split()),
+            command=_split_command(os.getenv("HERMES_ACP_COMMAND", "hermes-acp")),
             cwd=str(_workspace_dir()),
         )
         await client.start()
