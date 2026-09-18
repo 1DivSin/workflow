@@ -90,8 +90,7 @@ remain available.
 
 Start a new host session after installation so the skill/tools are rediscovered.
 When more than one host uses Workflow, run the install command once per host. Each
-host gets its own MCP registration and process environment; the runtime package can
-be shared, but do not set `PSI_WORKFLOW_HOST` as a shared shell-wide selector.
+host gets its own MCP registration, asset destination, config, and state directory.
 Codex uses `mcp_servers.fusion_flow` in `config.toml`; Hermes uses the same server
 name in its `config.yaml`; OpenClaw registers the native plugin's three tools.
 `doctor` reads the written configuration, launches the actual MCP process,
