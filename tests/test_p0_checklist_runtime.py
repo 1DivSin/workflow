@@ -110,6 +110,115 @@ class P0SelfContainedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 output_ids=("done",),
             )
 
+    async def test_q01_q09_independent_agent_branches_dispatch_in_parallel(self):
+        source = r"""
+const source: Artifact;
+const a: Artifact;
+const b: Artifact;
+const c: Artifact;
+const d: Artifact;
+const e: Artifact;
+const report: Artifact;
+const s1: Step;
+const s2: Step;
+const s3: Step;
+const s4: Step;
+const s5: Step;
+const reduce: Step;
+const worker: Agent, Executor;
+const reducer: Agent, Executor;
+
+workflow fanout {
+  input_workflow(fanout) == [source];
+  consumes(s1) == [source]; produces(s1) == [a];
+  consumes(s2) == [source]; produces(s2) == [b];
+  consumes(s3) == [source]; produces(s3) == [c];
+  consumes(s4) == [source]; produces(s4) == [d];
+  consumes(s5) == [source]; produces(s5) == [e];
+  consumes(reduce) == [a,b,c,d,e]; produces(reduce) == [report];
+  output_workflow(fanout) == [report];
+
+  step_executor(s1) == worker; step_name(s1) == "s1"; step_instruction(s1) == "review 1";
+  step_executor(s2) == worker; step_name(s2) == "s2"; step_instruction(s2) == "review 2";
+  step_executor(s3) == worker; step_name(s3) == "s3"; step_instruction(s3) == "review 3";
+  step_executor(s4) == worker; step_name(s4) == "s4"; step_instruction(s4) == "review 4";
+  step_executor(s5) == worker; step_name(s5) == "s5"; step_instruction(s5) == "review 5";
+  step_executor(reduce) == reducer; step_name(reduce) == "reduce"; step_instruction(reduce) == "reduce";
+}
+"""
+        active = 0
+        max_active = 0
+        lock = asyncio.Lock()
+
+        async def complete(_prompt, context):
+            nonlocal active, max_active
+            if context.step_id == "reduce":
+                return {"report": "done"}
+            async with lock:
+                active += 1
+                max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            async with lock:
+                active -= 1
+            return {context.output_ids[0]: context.step_id}
+
+        result = await execute_workflow(
+            source,
+            inputs={"source": "patch"},
+            complete=complete,
+            supported_executor_kinds=("Agent",),
+        )
+        self.assertEqual(result, {"report": "done"})
+        self.assertEqual(max_active, 5)
+
+    async def test_q02_q17_foreach_is_parallel_isolated_and_source_ordered(self):
+        source = r"""
+const items: Artifact;
+const item: Artifact;
+const results: Artifact;
+const analyze: Step;
+const worker: Agent, Executor;
+
+workflow map_items {
+  input_workflow(map_items) == [items];
+  foreach_item(analyze, items) == item;
+  produces(analyze) == [results];
+  output_workflow(map_items) == [results];
+  step_executor(analyze) == worker;
+  step_name(analyze) == "Analyze Item";
+  step_instruction(analyze) == "Analyze only the local item.";
+  max_concurrency(map_items) == 8;
+}
+"""
+        active = 0
+        max_active = 0
+        seen = []
+        lock = asyncio.Lock()
+
+        async def complete(_prompt, context):
+            nonlocal active, max_active
+            local = context.inputs["item"]
+            self.assertEqual(set(context.inputs), {"item"})
+            async with lock:
+                active += 1
+                max_active = max(max_active, active)
+                seen.append(local)
+            await asyncio.sleep(0.01 * (8 - int(local)))
+            async with lock:
+                active -= 1
+            return {"results": local}
+
+        values = [str(i) for i in range(1, 8)]
+        result = await execute_workflow(
+            source,
+            inputs={"items": values},
+            complete=complete,
+            supported_executor_kinds=("Agent",),
+        )
+        self.assertEqual(result["results"], values)
+        self.assertEqual(set(seen), set(values))
+        self.assertGreater(max_active, 1)
+
     async def test_q21_two_independent_programs_dispatch_in_parallel(self):
         source = r"""
 const compile_result: Artifact;
