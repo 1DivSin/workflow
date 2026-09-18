@@ -85,6 +85,20 @@ class HermesInstallTests(unittest.TestCase):
             self.assertIn("dynamic-workflow-mcp", text)
             self.assertEqual(text.count("fusion_flow:"), 1)
 
+    def test_user_owned_server_with_different_host_is_rejected(self):
+        original = (
+            "mcp_servers:\n"
+            "  fusion_flow:\n"
+            "    command: /codex/workflow\n"
+            "    env:\n"
+            "      PSI_WORKFLOW_HOST: codex\n"
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / "config.yaml"
+            config.write_text(original, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "host.*codex.*hermes"):
+                configure_hermes_mcp(config, ("dynamic-workflow-mcp",), raw)
+            self.assertEqual(config.read_text(encoding="utf-8"), original)
     def test_is_idempotent_and_creates_config(self):
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "nested" / "config.yaml"

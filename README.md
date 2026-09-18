@@ -78,6 +78,9 @@ is convenient for editing the runtime in place, but the source checkout must
 remain available.
 
 Start a new host session after installation so the skill/tools are rediscovered.
+When more than one host uses Workflow, run the install command once per host. Each
+host gets its own MCP registration and process environment; the runtime package can
+be shared, but do not set `PSI_WORKFLOW_HOST` as a shared shell-wide selector.
 Codex uses `mcp_servers.fusion_flow` in `config.toml`; Hermes uses the same server
 name in its `config.yaml`; OpenClaw registers the native plugin's three tools.
 `doctor` reads the written configuration, launches the actual MCP process,
@@ -130,9 +133,10 @@ export PSI_WORKFLOW_PROVIDER_CONFIG="$HOME/.config/genuineknowledge/providers.js
 
 The provider loader supports baseURLs, apiKeys, and models roles. A model such as provider:model selects baseURLs.provider; models without a prefix use baseURLs.default.
 
-## Host adapters
-
-Select the runtime host with PSI_WORKFLOW_HOST:
+## Direct runtime host selection
+For direct Python/runtime invocations, select the host with `PSI_WORKFLOW_HOST`.
+Host installations should use the per-host commands above so each MCP process gets
+its own selector.
 
 ~~~bash
 export PSI_WORKFLOW_HOST=codex      # Codex app-server

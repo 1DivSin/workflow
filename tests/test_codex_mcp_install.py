@@ -25,6 +25,19 @@ class CodexMcpInstallTests(unittest.TestCase):
                     self.assertEqual(tomllib.loads(result), tomllib.loads(original))
                     self.assertEqual(result, original)
 
+    def test_user_owned_server_with_different_host_is_rejected(self):
+        original = (
+            "[mcp_servers.fusion_flow]\n"
+            'command = "hermes-workflow"\n'
+            '[mcp_servers.fusion_flow.env]\n'
+            'PSI_WORKFLOW_HOST = "hermes"\n'
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / "config.toml"
+            config.write_text(original, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "host.*hermes.*codex"):
+                configure_codex_mcp(config, ("dynamic-workflow-mcp",), raw)
+            self.assertEqual(config.read_text(encoding="utf-8"), original)
     def test_inline_mcp_servers_can_receive_managed_server_and_update_it(self):
         originals = [
             "mcp_servers = {}\n",
