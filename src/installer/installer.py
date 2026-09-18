@@ -70,6 +70,21 @@ def _server_spec(
     }
 
 
+def _reject_host_mismatch(servers: object, target: str) -> None:
+    if not isinstance(servers, dict):
+        return
+    server = servers.get("fusion_flow")
+    if not isinstance(server, dict):
+        return
+    env = server.get("env")
+    configured = env.get("PSI_WORKFLOW_HOST") if isinstance(env, dict) else None
+    if isinstance(configured, str) and configured.strip().lower() not in {"", target}:
+        raise ValueError(
+            f"Existing fusion_flow server is configured for host {configured!r}, "
+            f"cannot install it for host {target!r}"
+        )
+
+
 def _codex_server_spec(
     command: Sequence[str],
     workspace: str | Path,
@@ -110,6 +125,7 @@ def configure_codex_mcp(
             inline_index is not None and _CODEX_INLINE_MANAGED in lines[inline_index]
         )
         if "fusion_flow" in servers and not inline_is_managed:
+            _reject_host_mismatch(servers, "codex")
             return path
 
         if inline_index is not None:
@@ -172,6 +188,7 @@ def configure_hermes_mcp(
     if servers is not None and not isinstance(servers, dict):
         raise ValueError("mcp_servers must be a YAML mapping")
     if isinstance(servers, dict) and "fusion_flow" in servers:
+        _reject_host_mismatch(servers, "hermes")
         return path
 
     document = yaml.compose(remaining)
