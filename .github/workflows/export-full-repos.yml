@@ -1,0 +1,115 @@
+name: Export full Git repositories
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: windows-latest
+
+    steps:
+      # 1. Checkout workflow 自己
+      - name: Checkout workflow with full history
+        uses: actions/checkout@v4
+        with:
+          repository: 1DivSin/workflow
+          ref: main
+          path: workflow
+          fetch-depth: 0
+          persist-credentials: false
+
+      # 2. Checkout psi-agent
+      - name: Checkout psi-agent with full history
+        uses: actions/checkout@v4
+        with:
+          repository: genuineknowledge/psi-agent
+          ref: main
+          path: psi-agent
+          fetch-depth: 0
+          persist-credentials: false
+
+      # 3. 检查两个仓库确实包含完整 .git
+      - name: Verify repositories
+        shell: pwsh
+        run: |
+          Write-Host "=== workflow ==="
+          git -C workflow rev-parse --is-inside-work-tree
+          git -C workflow rev-parse HEAD
+          git -C workflow log -1 --oneline
+
+          Write-Host ""
+          Write-Host "=== psi-agent ==="
+          git -C psi-agent rev-parse --is-inside-work-tree
+          git -C psi-agent rev-parse HEAD
+          git -C psi-agent log -1 --oneline
+
+          Write-Host ""
+          Write-Host "=== verify checklist historical commit ==="
+          git -C psi-agent cat-file -e "3362771961f8675a91f2ded897e708c716a43a5a^{commit}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Required psi-agent historical commit is missing"
+          }
+
+          Write-Host "Historical commit exists."
+
+      # 4. 打包完整目录，包括 .git
+      - name: Create full repository archives
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force export | Out-Null
+
+          Write-Host "Packing workflow..."
+          tar.exe -a -c -f export\workflow-full.zip workflow
+
+          Write-Host "Packing psi-agent..."
+          tar.exe -a -c -f export\psi-agent-full.zip psi-agent
+
+          Write-Host ""
+          Write-Host "=== Archive sizes ==="
+          Get-Item export\workflow-full.zip |
+            Select-Object Name, Length
+
+          Get-Item export\psi-agent-full.zip |
+            Select-Object Name, Length
+
+      # 5. 确认 .git 真的进入压缩包
+      - name: Verify .git is inside archives
+        shell: pwsh
+        run: |
+          $workflowGit = tar.exe -tf export\workflow-full.zip |
+            Select-String -SimpleMatch "workflow/.git/HEAD"
+
+          $psiGit = tar.exe -tf export\psi-agent-full.zip |
+            Select-String -SimpleMatch "psi-agent/.git/HEAD"
+
+          if (-not $workflowGit) {
+            throw "workflow-full.zip does not contain .git"
+          }
+
+          if (-not $psiGit) {
+            throw "psi-agent-full.zip does not contain .git"
+          }
+
+          Write-Host "workflow .git: OK"
+          Write-Host "psi-agent .git: OK"
+
+      # 6. 上传 workflow
+      - name: Upload workflow repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-full
+          path: export/workflow-full.zip
+          compression-level: 0
+          retention-days: 3
+
+      # 7. 上传 psi-agent
+      - name: Upload psi-agent repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: psi-agent-full
+          path: export/psi-agent-full.zip
+          compression-level: 0
+          retention-days: 3
