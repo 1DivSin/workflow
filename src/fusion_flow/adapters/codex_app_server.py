@@ -30,14 +30,17 @@ class CodexAppServerClient:
         self._stderr_task: asyncio.Task[bytes] | None = None
 
     async def start(self) -> None:
-        self.proc = await create_subprocess_exec(
-            *self.command,
-            cwd=self.cwd,
-            env=self.env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            self.proc = await create_subprocess_exec(
+                *self.command,
+                cwd=self.cwd,
+                env=self.env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as error:
+            raise RuntimeError(f"Codex app-server could not start: {error}") from error
         self._stderr_task = asyncio.create_task(drain_stream(self.proc.stderr))
         try:
             await self.request(
