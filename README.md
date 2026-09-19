@@ -23,6 +23,17 @@ This creates isolated, source-independent `dynamic-workflow`,
 configuration records the absolute installed CLI path rather than the Python
 interpreter that happened to run the installer.
 
+To provision separate Codex and Hermes integrations in one run, repeat `--host`:
+
+```sh
+dynamic-workflow install --host codex --host hermes --workspace /path/to/project
+```
+
+This creates one host-specific registration, asset destination, and state directory per
+host. Each frontend then starts its own MCP process; no shared shell-wide host selector
+is required.
+
+
 #### Codex
 
 ```sh
@@ -79,8 +90,7 @@ remain available.
 
 Start a new host session after installation so the skill/tools are rediscovered.
 When more than one host uses Workflow, run the install command once per host. Each
-host gets its own MCP registration and process environment; the runtime package can
-be shared, but do not set `PSI_WORKFLOW_HOST` as a shared shell-wide selector.
+host gets its own MCP registration, asset destination, config, and state directory.
 Codex uses `mcp_servers.fusion_flow` in `config.toml`; Hermes uses the same server
 name in its `config.yaml`; OpenClaw registers the native plugin's three tools.
 `doctor` reads the written configuration, launches the actual MCP process,

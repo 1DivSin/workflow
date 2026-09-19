@@ -120,3 +120,21 @@ def detect_host(
         "executable": None,
         "available": False,
     }
+
+
+def detect_hosts(
+    root: str | Path = ".",
+    *,
+    targets: tuple[str, ...] | None = None,
+    home: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> list[dict[str, object]]:
+    """Return every available host without honoring a single-host env override."""
+    env = os.environ if environ is None else environ
+    hosts = []
+    for name in targets or HOSTS:
+        host = detect_host(root, target=name, home=home, environ=env, which=which)
+        if host["available"]:
+            hosts.append(host)
+    return hosts
