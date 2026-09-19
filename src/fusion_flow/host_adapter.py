@@ -4,6 +4,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,7 +76,7 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     name = host_name()
     if name not in {"codex", "openclaw", "hermes"}: return None
     home = Path.home()
-    bases = {"codex": Path(os.getenv("CODEX_HOME", str(home / ".codex"))), "openclaw": Path(os.getenv("OPENCLAW_HOME", str(home / ".openclaw"))), "hermes": Path(os.getenv("HERMES_HOME", str(home / ".hermes")))}
+    bases = {name: Path(value).expanduser().resolve() for name, value in {"codex": os.getenv("CODEX_HOME", str(home / ".codex")), "openclaw": os.getenv("OPENCLAW_HOME", str(home / ".openclaw")), "hermes": os.getenv("HERMES_HOME", str(home / ".hermes"))}.items()}
     base = bases[name]
     override = os.getenv({"codex": "CODEX_EXECUTABLE", "openclaw": "OPENCLAW_EXECUTABLE", "hermes": "HERMES_EXECUTABLE"}[name], "").strip()
     command_override = os.getenv({"codex": "CODEX_APP_SERVER_COMMAND", "hermes": "HERMES_ACP_COMMAND", "openclaw": "OPENCLAW_COMMAND"}[name], "").strip()
@@ -90,8 +91,8 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
         return None
 
     workspace = _workspace_override(root)
-    tools = Path(os.getenv(TOOLS_ENV, str(base / "tools")))
-    state = Path(os.getenv(STATE_ENV, str(base / "state")))
+    tools = Path(os.getenv(TOOLS_ENV, str(base / "tools"))).expanduser().resolve()
+    state = Path(os.getenv(STATE_ENV, str(base / "state"))).expanduser().resolve()
     env = {**_credential_env(), **os.environ, HOST_ENV: name, WORKSPACE_ENV: str(workspace), TOOLS_ENV: str(tools), STATE_ENV: str(state)}
     try:
         env.update(provider_environment("default"))
@@ -102,7 +103,7 @@ def host_config(default: str | Path = ".") -> HostConfig | None:
     if name == "hermes":
         if source and source.is_dir():
             env["PYTHONPATH"] = str(source) + os.pathsep + os.getenv("PYTHONPATH", "")
-            venv = source / ".venv" / "bin" / "python"
+            venv = source / ".venv" / ("Scripts" if sys.platform == "win32" else "bin") / ("python.exe" if sys.platform == "win32" else "python")
             if not override and not command_override and venv.exists():
                 command = (str(venv), "-m", "hermes_cli.main")
         elif os.getenv("HERMES_PYTHONPATH"):
