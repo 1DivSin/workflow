@@ -39,6 +39,34 @@ class AdapterLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         client.proc.kill()
                         await client.proc.communicate()
 
+    async def test_codex_accepts_jsonl_record_larger_than_asyncio_default_limit(self):
+        with tempfile.TemporaryDirectory() as raw:
+            script = Path(raw) / "codex_app_server.py"
+            script.write_text(
+                "import json,sys\n"
+                "r=json.loads(sys.stdin.readline())\n"
+                "print(json.dumps({'id':r['id'],'result':{}}),flush=True)\n"
+                "r=json.loads(sys.stdin.readline())\n"
+                "print(json.dumps({'id':r['id'],'result':{'thread':{'id':'thread'}}}),flush=True)\n"
+                "json.loads(sys.stdin.readline())\n"
+                "print(json.dumps({'method':'item/agentMessage/delta','params':{'delta':'x'*70000}}),flush=True)\n"
+                "print(json.dumps({'method':'turn/completed','params':{'turn':{'status':'completed'}}}),flush=True)\n",
+                encoding="utf-8",
+            )
+            client = CodexAppServerClient(
+                command=(sys.executable, str(script)),
+                env={**os.environ, "HOME": raw},
+            )
+            try:
+                with anyio.fail_after(3):
+                    await client.start()
+                    events = [event async for event in client.prompt(raw, "test")]
+                self.assertEqual(len(events[0].params["delta"]), 70000)
+                self.assertEqual(events[-1].method, "turn/completed")
+            finally:
+                if client.proc is not None:
+                    await client.close()
+
     async def test_hermes_child_acp_skips_globally_configured_mcps(self):
         captured = {}
 
