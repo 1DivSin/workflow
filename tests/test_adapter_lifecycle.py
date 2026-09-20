@@ -39,6 +39,23 @@ class AdapterLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         client.proc.kill()
                         await client.proc.communicate()
 
+    async def test_hermes_child_acp_skips_globally_configured_mcps(self):
+        captured = {}
+
+        async def fail_start(*_args, **kwargs):
+            captured["env"] = kwargs["env"]
+            raise OSError("stop after environment capture")
+
+        client = HermesACPClient(command=("hermes-acp",))
+        with patch(
+            "fusion_flow.adapters.hermes_acp.create_subprocess_exec",
+            side_effect=fail_start,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Hermes ACP could not start"):
+                await client.start()
+
+        self.assertEqual(captured["env"]["HERMES_ACP_SKIP_CONFIGURED_MCP"], "1")
+
     async def test_initialize_error_cleans_up_without_caller_close(self):
         for cls in (CodexAppServerClient, HermesACPClient):
             with self.subTest(adapter=cls.__name__), tempfile.TemporaryDirectory() as raw:
