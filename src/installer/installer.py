@@ -19,6 +19,7 @@ from .detect import detect_host
 _CODEX_BEGIN = "# BEGIN dynamic-workflow"
 _CODEX_END = "# END dynamic-workflow"
 _CODEX_INLINE_MANAGED = "# dynamic-workflow managed fusion_flow"
+_CODEX_TOOL_TIMEOUT_SECONDS = 900
 
 _HERMES_BEGIN = "  # BEGIN dynamic-workflow"
 _HERMES_END = "  # END dynamic-workflow"
@@ -89,7 +90,9 @@ def _codex_server_spec(
     command: Sequence[str],
     workspace: str | Path,
 ) -> dict[str, object]:
-    return _server_spec(command, workspace, "codex")
+    server = _server_spec(command, workspace, "codex")
+    server["tool_timeout_sec"] = _CODEX_TOOL_TIMEOUT_SECONDS
+    return server
 
 
 def _inline_mcp_servers_line(lines: list[str]) -> int | None:
@@ -149,6 +152,7 @@ def configure_codex_mcp(
         "[mcp_servers.fusion_flow]",
         f"command = {json.dumps(server['command'])}",
         f"args = {_toml_inline_value(server['args'])}",
+        f"tool_timeout_sec = {server['tool_timeout_sec']}",
         "[mcp_servers.fusion_flow.env]",
         'PSI_WORKFLOW_HOST = "codex"',
         f"PSI_WORKFLOW_WORKSPACE = {json.dumps(server['env']['PSI_WORKFLOW_WORKSPACE'])}",

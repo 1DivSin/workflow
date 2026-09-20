@@ -70,6 +70,7 @@ class CodexMcpInstallTests(unittest.TestCase):
                     server = updated["mcp_servers"]["fusion_flow"]
                     self.assertEqual(server["command"], "/opt/new/dynamic-workflow-mcp")
                     self.assertEqual(server["args"], [])
+                    self.assertEqual(server["tool_timeout_sec"], 900)
                     self.assertNotIn("PYTHONPATH", server["env"])
 
     def test_invalid_config_and_incomplete_managed_block_are_not_written(self):
@@ -95,6 +96,7 @@ class CodexMcpInstallTests(unittest.TestCase):
             server = parsed["mcp_servers"]["fusion_flow"]
             self.assertEqual(server["command"], "/new/mcp")
             self.assertEqual(server["args"], ["--stdio"])
+            self.assertEqual(server["tool_timeout_sec"], 900)
             self.assertIn("# another integration", result)
 
     def test_configure_codex_mcp_is_idempotent_and_preserves_existing_config(self):
@@ -112,6 +114,7 @@ class CodexMcpInstallTests(unittest.TestCase):
             parsed = tomllib.loads(first)
             server = parsed["mcp_servers"]["fusion_flow"]
             self.assertEqual(server["command"], command[0])
+            self.assertEqual(server["tool_timeout_sec"], 900)
             self.assertNotIn("PYTHONPATH", server["env"])
 
 
