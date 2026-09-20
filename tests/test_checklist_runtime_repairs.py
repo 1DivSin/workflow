@@ -109,6 +109,87 @@ class ChecklistRuntimeRepairTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([event.method for event in events], ["item/agentMessage/delta", "turn/completed"])
             self.assertTrue(log_path.is_file())
 
+    async def test_codex_agent_rejects_failed_turn_even_after_valid_json_delta(self):
+        class Client:
+            start = AsyncMock()
+            close = AsyncMock()
+
+            async def prompt(self, *_args):
+                yield SimpleNamespace(
+                    method="item/agentMessage/delta",
+                    params={"delta": '{"summary":"looks valid"}'},
+                )
+                yield SimpleNamespace(
+                    method="turn/completed",
+                    params={"turn": {"status": "failed", "error": {"message": "interrupted"}}},
+                )
+
+        async def registry(_session_id):
+            return runtime._StepToolRegistry()
+
+        adapter = runtime._AgentSessionAdapter(
+            ai_socket="direct-host://codex",
+            get_tool_registry=registry,
+            run_id="run",
+        )
+        context = SimpleNamespace(
+            step_id="review",
+            executor_id="agent",
+            terminal=False,
+            output_ids=("summary",),
+            dispatch=SimpleNamespace(invocation_id="review", iteration_index=None),
+        )
+        completion_token = runtime._CURRENT_AGENT_COMPLETION.set(context)
+        tools_token = runtime._CURRENT_AGENT_TOOLS.set(runtime._StepToolRegistry())
+        try:
+            with (
+                patch.dict(os.environ, {"PSI_WORKFLOW_HOST": "codex"}, clear=False),
+                patch.object(runtime, "_codex_app_server_client", return_value=Client()),
+                self.assertRaises(runtime.ExecutionPlanError),
+            ):
+                await adapter.run_session(
+                    runtime.AgentConfig(name="agent", system_prompt="test"),
+                    runtime.SessionInvocation(
+                        "validate",
+                        {runtime._AGENT_SESSION_CONTEXT_KEY: "{}"},
+                    ),
+                )
+        finally:
+            runtime._CURRENT_AGENT_TOOLS.reset(tools_token)
+            runtime._CURRENT_AGENT_COMPLETION.reset(completion_token)
+
+    async def test_codex_human_rejects_failed_turn_even_after_valid_json_delta(self):
+        class Client:
+            start = AsyncMock()
+            close = AsyncMock()
+
+            async def prompt(self, *_args):
+                yield SimpleNamespace(
+                    method="item/agentMessage/delta",
+                    params={
+                        "delta": (
+                            '{"question":"Accept?","options":["Yes"],'
+                            '"recommended":1,"default":""}'
+                        )
+                    },
+                )
+                yield SimpleNamespace(
+                    method="turn/failed",
+                    params={"error": {"message": "transport failed"}},
+                )
+
+        with (
+            patch.dict(os.environ, {"PSI_WORKFLOW_HOST": "codex"}, clear=False),
+            patch.object(runtime, "_codex_app_server_client", return_value=Client()),
+            self.assertRaises(runtime.ExecutionPlanError),
+        ):
+            await runtime._prepare_human_step(
+                "Ask for approval.",
+                SimpleNamespace(step_id="review"),
+                ai_socket="direct-host://codex",
+                tool_registry=runtime._StepToolRegistry(),
+            )
+
     async def test_direct_agent_runtime_repairs_terminal_output_once(self):
         host = _SequenceRuntime(
             [
