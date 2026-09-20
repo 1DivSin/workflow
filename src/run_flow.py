@@ -770,6 +770,16 @@ class _AgentSessionAdapter:
                     chunks: list[str] = []
                     try:
                         async for event in client.prompt(str(_workspace_dir()), codex_prompt):
+                            if event.method in {"turn/failed", "turn/cancelled"}:
+                                raise ExecutionPlanError(
+                                    f"Codex Agent turn failed for step {context.step_id!r}: {event.params}"
+                                )
+                            if event.method == "turn/completed":
+                                turn = event.params.get("turn", {})
+                                if isinstance(turn, dict) and turn.get("status", "completed") != "completed":
+                                    raise ExecutionPlanError(
+                                        f"Codex Agent turn failed for step {context.step_id!r}: {turn}"
+                                    )
                             if event.method == "item/agentMessage/delta":
                                 delta = event.params.get("delta")
                                 if isinstance(delta, str):
@@ -1817,6 +1827,11 @@ async def _execute_program_command(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=invocation.cwd,
+                env={
+                    **os.environ,
+                    "PYTHONUTF8": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                },
                 creationflags=creation_flags,
                 start_new_session=os.name == "posix",
             )
@@ -3178,6 +3193,16 @@ async def _prepare_human_step(
         )
         try:
             async for event in client.prompt(str(_workspace_dir()), message):
+                if event.method in {"turn/failed", "turn/cancelled"}:
+                    raise ExecutionPlanError(
+                        f"Codex Human preparation turn failed for step {context.step_id!r}: {event.params}"
+                    )
+                if event.method == "turn/completed":
+                    turn = event.params.get("turn", {})
+                    if isinstance(turn, dict) and turn.get("status", "completed") != "completed":
+                        raise ExecutionPlanError(
+                            f"Codex Human preparation turn failed for step {context.step_id!r}: {turn}"
+                        )
                 if event.method == "item/agentMessage/delta":
                     delta = event.params.get("delta")
                     if isinstance(delta, str):
