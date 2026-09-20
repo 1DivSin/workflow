@@ -67,6 +67,40 @@ class ProgramContractTests(unittest.IsolatedAsyncioTestCase):
                 inv, ai_socket="", tool_registry=runtime._StepToolRegistry(), agent_runtime=agent
             )
 
+    async def test_program_subprocess_forces_utf8_environment(self):
+        captured = {}
+
+        async def fail_open_process(*_args, **kwargs):
+            captured["env"] = kwargs["env"]
+            raise OSError("stop after environment capture")
+
+        invocation = ProgramInvocation(
+            name="program",
+            argv=("source.py",),
+            stdin="{}\n",
+            cwd=Path.cwd(),
+            binding_name="program",
+            output_ids=("result",),
+            dispatch=SimpleNamespace(
+                iteration_index=None,
+                loop_id=None,
+                invocation_id="program",
+                resource_lease=SimpleNamespace(grants=()),
+            ),
+        )
+        with (
+            patch.object(runtime.anyio, "open_process", side_effect=fail_open_process),
+            self.assertRaises(OSError),
+        ):
+            await runtime._execute_program_command(
+                invocation,
+                (sys.executable, "source.py"),
+                stdin="{}\n",
+            )
+
+        self.assertEqual(captured["env"]["PYTHONUTF8"], "1")
+        self.assertEqual(captured["env"]["PYTHONIOENCODING"], "utf-8")
+
     async def test_host_receives_contract_and_all_tool_parameters(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
