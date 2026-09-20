@@ -8,6 +8,9 @@ from typing import Any, AsyncIterator
 from ..process import close_subprocess, create_subprocess_exec, drain_stream
 
 
+_CODEX_STREAM_READER_LIMIT_BYTES = 8 * 1024 * 1024
+
+
 @dataclass
 class CodexEvent:
     method: str
@@ -38,6 +41,7 @@ class CodexAppServerClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=_CODEX_STREAM_READER_LIMIT_BYTES,
             )
         except OSError as error:
             raise RuntimeError(f"Codex app-server could not start: {error}") from error
