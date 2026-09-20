@@ -19,6 +19,7 @@ from .detect import detect_host
 _CODEX_BEGIN = "# BEGIN dynamic-workflow"
 _CODEX_END = "# END dynamic-workflow"
 _CODEX_INLINE_MANAGED = "# dynamic-workflow managed fusion_flow"
+_CODEX_TOOL_TIMEOUT_SECONDS = 900
 
 _HERMES_BEGIN = "  # BEGIN dynamic-workflow"
 _HERMES_END = "  # END dynamic-workflow"
