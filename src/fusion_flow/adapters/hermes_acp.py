@@ -40,6 +40,10 @@ class HermesACPClient:
             return
         env = dict(os.environ)
         env.update(self.env or {})
+        # Workflow owns the MCP surface for these child ACP sessions. Hermes
+        # otherwise starts every globally configured MCP before initialize,
+        # which would re-expose fusion_flow to an Agent Step.
+        env.setdefault("HERMES_ACP_SKIP_CONFIGURED_MCP", "1")
         env_file = Path(env.get("HOME", str(Path.home()))) / ".hermes" / ".env"
         if env_file.exists():
             for line in env_file.read_text().splitlines():
