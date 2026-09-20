@@ -20,6 +20,17 @@ class AgentWorkflowPromptTests(unittest.TestCase):
         self.assertIn("flow_manage", prompt)
         self.assertGreater(prompt.rfind("never"), prompt.rfind("调用 run_flow"))
 
+    def test_nested_launcher_guard_uses_tool_identifiers_not_language(self):
+        self.assertTrue(
+            runtime._requests_workflow_launcher(
+                "调用 run_flow 再启动一个子 workflow，并在子 workflow 中读取 README.md"
+            )
+        )
+        self.assertTrue(runtime._requests_workflow_launcher("run_flow_resume the pending child"))
+        self.assertTrue(runtime._requests_workflow_launcher("请调用 flow_run"))
+        self.assertFalse(runtime._requests_workflow_launcher("review workflow orchestration"))
+        self.assertFalse(runtime._requests_workflow_launcher("document run_flowing behavior"))
+
     def test_shared_step_system_prompt_forbids_workflow_tools(self):
         for tool in ("flow_run", "run_flow", "run_flow_resume", "flow_manage"):
             self.assertIn(tool, runtime._STEP_SYSTEM_PROMPT)

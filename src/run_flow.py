@@ -197,6 +197,22 @@ async def _cleanup_terminal_run_tools(run: HumanWorkflowRun) -> None:
 
 
 _WORKFLOW_LAUNCHERS = frozenset({"flow_run", "run_flow", "run_flow_resume"})
+
+
+def _requests_workflow_launcher(prompt: str) -> bool:
+    """Fail closed when an Agent Step instruction names a Workflow launcher.
+
+    Launcher identifiers are reserved inside Agent Steps. Match the stable tool
+    names directly instead of guessing the surrounding natural language, so the
+    guard works for Chinese and other languages as well as English.
+    """
+
+    return any(
+        re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", prompt)
+        for name in _WORKFLOW_LAUNCHERS
+    )
+
+
 _WORKSPACE_PATH_PARAMETERS = {
     "edit": "file_path",
     "read": "file_path",
@@ -622,11 +638,7 @@ class _AgentSessionAdapter:
     ) -> dict[str, object]:
         """Execute or resume one schema-bound Agent Step session."""
 
-        launcher_request = (
-            ("call run_flow" in prompt or "call run_flow_resume" in prompt or "call flow_run" in prompt)
-            and ("child workflow" in prompt or "nested workflow" in prompt or "瀛?workflow" in prompt)
-        )
-        if launcher_request:
+        if _requests_workflow_launcher(prompt):
             raise ExecutionPlanError(
                 f"Agent Step {context.step_id!r} requested a nested Workflow launcher; "
                 "Workflow launcher tools are unavailable inside Agent Steps"
