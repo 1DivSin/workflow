@@ -87,6 +87,15 @@ function resolveBridge(config, installed) {
   return { command: ["dynamic-workflow-tool"], env: {} };
 }
 
+function isWorkflowChildSession(context) {
+  const sessionKey = context?.sessionKey;
+  return typeof sessionKey === "string" && /^agent:[^:]+:workflow:[^:]+$/.test(sessionKey);
+}
+
+function workflowTool(context, tool) {
+  return isWorkflowChildSession(context) ? null : tool;
+}
+
 function runWorkflow(name, params, workspace, config, signal) {
   const settingsPath = path.join(pluginRoot, "runtime.json");
   const installed = existsSync(settingsPath)
@@ -146,7 +155,7 @@ export default {
   description: "Run and manage FusionFlow workflows from OpenClaw.",
   register(api) {
     const config = api.pluginConfig || {};
-    api.registerTool((context) => ({
+    api.registerTool((context) => workflowTool(context, {
       name: "run_flow",
       description: "Run a workspace-local FusionFlow workflow.",
       parameters: parameters({
@@ -159,7 +168,7 @@ export default {
         return runWorkflow("run_flow", params, context.workspaceDir, config, signal);
       },
     }), { name: "run_flow" });
-    api.registerTool((context) => ({
+    api.registerTool((context) => workflowTool(context, {
       name: "run_flow_resume",
       description: "Resume a waiting Human Step.",
       parameters: parameters({
@@ -171,7 +180,7 @@ export default {
         return runWorkflow("run_flow_resume", params, context.workspaceDir, config, signal);
       },
     }), { name: "run_flow_resume" });
-    api.registerTool((context) => ({
+    api.registerTool((context) => workflowTool(context, {
       name: "flow_manage",
       description: "Manage reusable FusionFlow workflow assets.",
       parameters: parameters({

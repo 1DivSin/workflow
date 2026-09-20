@@ -21,6 +21,32 @@ test('bridge envelope reports execution errors explicitly', () => {
   );
 });
 
+test('workflow child sessions do not receive workflow launcher tools', () => {
+  const registrations = [];
+  plugin.register({
+    pluginConfig: {},
+    registerTool(factory, options) { registrations.push({factory, options}); },
+  });
+
+  const childContext = {
+    workspaceDir: process.cwd(),
+    sessionKey: 'agent:main:workflow:0123456789abcdef',
+  };
+  for (const {factory} of registrations) {
+    assert.equal(factory(childContext), null);
+  }
+
+  const mainContext = {
+    workspaceDir: process.cwd(),
+    sessionKey: 'agent:main:main',
+  };
+  const mainTools = registrations.map(({factory}) => factory(mainContext));
+  assert.deepEqual(
+    mainTools.map(tool => tool.name).sort(),
+    ['flow_manage', 'run_flow', 'run_flow_resume'],
+  );
+});
+
 test('registered tool uses the stable workflow CLI with the active workspace', async () => {
   const workspace = mkdtempSync(path.join(tmpdir(), 'workflow-plugin-'));
   const registrations = [];
