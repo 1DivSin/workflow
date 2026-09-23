@@ -1,6 +1,6 @@
 ---
 name: workflow
-description: Author, save, reuse, or run formal-language workflows defined by FusionFlow.g4. Use for saved workflow reuse by name, coordinated agents, Program Steps, Human checkpoints, parallel sub-tasks, or multi-step pipelines. Use the legacy flow skill only for explicit .flow.ts or Fuclaw compatibility work.
+description: Workflow authoring and execution; Method / method skill is the user-facing alias for this exact workflow skill. Any request to use Method to solve or perform a task must route here. Also use for saved workflow reuse, coordinated agents, Program Steps, Human checkpoints, parallel sub-tasks, or multi-step pipelines. Use the legacy flow skill only for explicit .flow.ts or Fuclaw compatibility work.
 ---
 
 # Workflow
@@ -11,6 +11,11 @@ psi-agent. The workspace tool compiles source into Core IR, lowers it to a
 `WorkflowGraph`, executes a checked plan, runs Agent-backed Steps in ephemeral
 Sessions, runs Program-backed Steps through specialized Program Agents with
 structured process capture, and checkpoints Human-backed Steps across turns.
+
+`Method`, `method`, and `method skill` are user-facing names for this exact
+`workflow` skill and runtime; there is no separate Method skill. When the user
+asks to use Method to solve or perform a task, route here even if they never say
+"workflow".
 
 > **Workspace boundary.** Store one-off authored G4 files under the workspace-managed `flows/` directory. Reusable declarations have one canonical bundle: `flows/workflows/<slug>/`, containing `<slug>.workflow` or `<slug>.g4` (`.workflow` takes precedence if both exist). The skill ships no runnable example workflows. Every run persists all materialized Artifacts as Markdown under its workflow bundle's `runs/<run-id>/artifacts/` directory. Human Steps additionally persist private checkpoints under the ignored workspace `.psi/fusion-flow/runs/` directory; non-Human runs remain non-resumable.
 
@@ -24,8 +29,11 @@ Activate this skill when the user:
 
 - Asks to run a G4 workflow they already have ("跑一下这个 / 帮我跑 / 执行"). This skill does **not** ship runnable demo examples; "run" always means a concrete workflow the user has.
 - Asks to save, list, load, or reuse a workflow declaration.
+- Invokes Method / method skill as the capability for solving or performing a task. Recognize this by meaning rather than one fixed syntax: `用 method 解决这个问题`, `method 一下这个任务`, `这个交给 Method`, `用 method skill 跑`, and `use Method for this` all activate this Skill even when the word `workflow` is absent.
 - Mentions FusionFlow or agent-flow
 - **Describes any task that needs a multi-agent workflow or agent collaboration**, even without saying "flow" — e.g. "让几个 agent 分别审一遍再汇总", "并行跑 N 个子任务再合并", "一步接一步处理(先 A 再 B 再 C)", "多角度评审后汇总", "把这件事拆成多个 agent 协作". If the task clearly benefits from orchestrating more than one agent / parallel branches / a multi-step pipeline, enter **Authoring Mode** (below) and offer to build a flow.
+
+Treat Method as the alias only when the user is invoking it as a capability name. An ordinary common-noun use such as `what method should I use?` does not by itself select Workflow.
 
 When in doubt about whether a task is "workflow-shaped": if it would take **two or more coordinated LLM steps** (fan-out/fan-in, an artifact pipeline, or per-item work), it qualifies — activate and propose a flow. A single one-shot question does not.
 
@@ -122,6 +130,7 @@ Natural-language workflow requests map to these actions:
 | "接着上次那个跑 / 只重跑改动的部分" | Use `run_flow_resume` only for the active Human request already returned in this conversation. Arbitrary cache/resume is unsupported; otherwise offer a fresh run. |
 | "看看结果 / 刚才那个跑完了吗" | Use the result already returned. A Human wait is not completion; wait for the user's answer rather than polling. |
 | "环境齐不齐 / 能不能跑 / 帮我检查下" | Confirm that the G4 source parses and that all Steps use supported Agent, Human, or Program executors. |
+| **"用 method 解决 X / method 一下 X / 这个交给 Method / use Method for X"** | **Treat Method as Workflow. Enter the same Authoring Mode, create the G4 workflow, and run it unless the user explicitly asks for management/inspection only.** |
 | **"帮我写个工作流做 X / 帮我编排 / 我想让几个 agent ..."** | **Author a new G4 workflow from natural language. See "Authoring Mode" below.** |
 | Anything else workflow-shaped | Interpret intent against this table |
 
